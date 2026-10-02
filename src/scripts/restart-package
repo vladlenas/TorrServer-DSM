@@ -1,0 +1,5 @@
+#!/bin/sh
+
+UNIT="pkg-TorrServer-restart.service"
+
+exec /usr/bin/systemctl start "${UNIT}"
