@@ -118,3 +118,9 @@ service_preupgrade()
     fi
 }
 
+
+service_postupgrade()
+{
+    /usr/syno/bin/synosystemctl reload nginx.service
+}
+

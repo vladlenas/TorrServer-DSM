@@ -94,7 +94,11 @@ def localize_html(content):
 
     # Locale files use English source strings as keys. Replace only textual
     # strings; URLs, paths and program identifiers are intentionally untouched.
-    for source, translated in translations.items():
+    for source, translated in sorted(
+        translations.items(),
+        key=lambda item: len(item[0]),
+        reverse=True
+    ):
         if source and source != translated:
             content = content.replace(source, str(translated))
     return content
@@ -1054,6 +1058,13 @@ button.danger,
     background: #d32f2f;
 }}
 
+button.danger:disabled,
+.button.danger:disabled {{
+    background: #777;
+    opacity: 0.55;
+    cursor: not-allowed;
+}}
+
 .nav .button {{
     min-height: 34px;
     padding: 7px 16px;
@@ -1501,6 +1512,10 @@ pre {{
     box-shadow: 0 1px 3px rgba(30,50,80,.06);
     margin-bottom: 16px;
     overflow: hidden;
+}}
+
+.settings-card.disabled {{
+    opacity: 0.55;
 }}
 
 .settings-card-title {{
@@ -2187,7 +2202,7 @@ def settings_page(message="", cache_path_override=""):
 
         <div class="checkbox-row">
             <label>
-                <input type="checkbox" name="https" value="1" {} onchange="toggleHttps()">
+                <input type="checkbox" name="https" value="1" {} {} onchange="toggleHttps()">
                 Enable HTTPS
             </label>
         </div>
@@ -2207,7 +2222,7 @@ def settings_page(message="", cache_path_override=""):
     </div>
 </div>
 
-<div class="settings-card">
+<div class="settings-card{}">
     <div class="settings-card-title">
         <span class="metric-icon">▣</span>
         <span>SSL Certificate</span>
@@ -2245,7 +2260,6 @@ def settings_page(message="", cache_path_override=""):
         <div class="help">
             The selected source will be synchronized to TorrServer server.pem/server.key.
         </div>
-        {}
 
     </div>
 </div>
@@ -2370,9 +2384,11 @@ toggleAuth();
         port,
         html.escape(cache_path or "/volume1/downloads"),
         "checked" if https else "",
+        "disabled" if not privileged else "",
         https_port,
         "checked" if force_https else "",
         "" if https else "disabled",
+        " disabled" if not privileged else "",
         "selected" if ssl_mode == SSL_CERT_MODE_SELF else "",
         "selected" if ssl_mode == SSL_CERT_MODE_DSM else "",
         "disabled" if not privileged else "",
@@ -2389,9 +2405,6 @@ toggleAuth();
         ),
         html.escape(ssl_cert, quote=True),
         html.escape(ssl_key, quote=True),
-        ("<div class=\"notice\"><strong>Additional DSM permissions are required for DSM and manual certificates.</strong> "
-         "<button type=\"button\" class=\"secondary\" onclick=\"openPermissions()\">Setup permissions</button></div>"
-         if not privileged else ""),
         "checked" if auth else "",
         html.escape(saved_username, quote=True),
         "" if auth else "disabled",
@@ -2719,6 +2732,22 @@ class Handler(BaseHTTPRequestHandler):
             return
 
         if path == "/restart":
+            if not has_privileged_access():
+                self.send_html(
+                    localize_html(
+                        page_header("Restart Error")
+                        + """
+<div class="card">
+<h1>Restart unavailable</h1>
+<p>Restart is unavailable until DSM permissions are configured.</p>
+</div>
+"""
+                        + page_footer()
+                    ),
+                    403
+                )
+                return
+
             ok, message = restart_package()
 
             if ok:
