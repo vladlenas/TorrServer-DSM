@@ -63,6 +63,19 @@ if [ "${HTTPS_ENABLED}" = "1" ]; then
     fi
 fi
 
+TORRSERVER_FUSE_ARGS=""
+if [ "$(cat "${CONFIG_DIR}/torrserver.fuse" 2>/dev/null)" = "1" ]; then
+    TORRSERVER_DIR="$(cat "${CONFIG_DIR}/torrserver.dir" 2>/dev/null)"
+
+    if [ -n "${TORRSERVER_DIR}" ]; then
+        TORRSERVER_FUSE_PATH="${TORRSERVER_DIR%/}/FUSE"
+
+        if [ -d "${TORRSERVER_FUSE_PATH}" ]; then
+            TORRSERVER_FUSE_ARGS="--fusepath ${TORRSERVER_FUSE_PATH}"
+        fi
+    fi
+fi
+
 update_firewall_port()
 {
     local sc_file="${SYNOPKG_PKGDEST}/ui/TorrServer.sc"
@@ -96,10 +109,10 @@ fi
 
 if [ "${AUTH_ENABLED}" = "1" ]; then
     SERVICE_COMMAND="/bin/python3 ${SYNOPKG_PKGDEST}/helper/helper.py
-${SYNOPKG_PKGDEST}/bin/TorrServer -d ${SYNOPKG_PKGVAR} -p ${TORRSERVER_PORT} -a ${TORRSERVER_SSL_ARGS} -l ${TORRSERVER_LOG}"
+${SYNOPKG_PKGDEST}/bin/TorrServer -d ${SYNOPKG_PKGVAR} -p ${TORRSERVER_PORT} -a ${TORRSERVER_SSL_ARGS} ${TORRSERVER_FUSE_ARGS} -l ${TORRSERVER_LOG}"
 else
     SERVICE_COMMAND="/bin/python3 ${SYNOPKG_PKGDEST}/helper/helper.py
-${SYNOPKG_PKGDEST}/bin/TorrServer -d ${SYNOPKG_PKGVAR} -p ${TORRSERVER_PORT} ${TORRSERVER_SSL_ARGS} -l ${TORRSERVER_LOG}"
+${SYNOPKG_PKGDEST}/bin/TorrServer -d ${SYNOPKG_PKGVAR} -p ${TORRSERVER_PORT} ${TORRSERVER_FUSE_ARGS} ${TORRSERVER_SSL_ARGS} -l ${TORRSERVER_LOG}"
 fi
 
 SVC_BACKGROUND=y

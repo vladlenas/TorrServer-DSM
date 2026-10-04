@@ -56,6 +56,10 @@ TorrServer works without additional root privileges. If automatic certificate sy
 
     /var/packages/TorrServer/scripts/setup-permissions
 
+Disable Helper privileges:
+
+    sudo rm -f /etc/sudoers.d/TorrServer
+
 The TorrServer Helper shows the same instruction in a separate window and can check whether the permission is configured.
 
 ## TorrServer Version
