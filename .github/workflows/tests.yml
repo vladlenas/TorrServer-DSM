@@ -30,6 +30,11 @@ jobs:
       - name: Helper unit tests
         run: python3 -m unittest discover -s tests -v
 
+      - name: Desktop app (JS) tests
+        run: |
+          node --check src/ui/TorrServer.js
+          node tests/test_ui.js
+
       - name: Package script tests
         run: sh tests/test_scripts.sh
 

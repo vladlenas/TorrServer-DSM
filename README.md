@@ -68,6 +68,7 @@ the binaries are already cached).
 No DSM is needed:
 
     python3 -m unittest discover -s tests -v   # helper.py
+    node tests/test_ui.js                      # DSM desktop app (src/ui/TorrServer.js)
     sh tests/test_scripts.sh                   # package scripts, upgrade migration
     bash tests/test_build.sh                   # checksum handling in build-package.sh
 

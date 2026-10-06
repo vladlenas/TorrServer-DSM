@@ -561,5 +561,41 @@ esac
             grp.getgrnam, pwd.getpwnam, os.getgrouplist = real_grp, real_pwd, real_list
 
 
+    def test_admin_check_ignores_name_case(self):
+        """DSM's authenticate.cgi printed "Vlad" for the account stored as "vlad"."""
+        h.is_dsm_admin = self.saved[1]
+        import grp, pwd
+        real_grp, real_pwd, real_list = grp.getgrnam, pwd.getpwnam, os.getgrouplist
+        group = type("G", (), {"gr_mem": ["vlad"], "gr_gid": 101})()
+
+        def only_lowercase(name):
+            if name != "vlad":
+                raise KeyError(name)
+            return type("P", (), {"pw_gid": 100})()
+
+        try:
+            grp.getgrnam = lambda name: group
+            pwd.getpwnam = only_lowercase
+            os.getgrouplist = lambda name, gid: [100, 101] if name == "vlad" else [100]
+            self.assertTrue(h.is_dsm_admin("Vlad"))     # listed member, other case
+            self.assertTrue(h.is_dsm_admin("VLAD"))
+            # The group list alone must be enough (no passwd entry, no NSS):
+            pwd.getpwnam = lambda name: (_ for _ in ()).throw(KeyError(name))
+            self.assertTrue(h.is_dsm_admin("Vlad"))
+            self.assertFalse(h.is_dsm_admin("Someone"))
+            pwd.getpwnam = only_lowercase
+            group.gr_mem = []
+            self.assertTrue(h.is_dsm_admin("Vlad"))     # member only through NSS
+            os.getgrouplist = lambda name, gid: [100]
+            self.assertFalse(h.is_dsm_admin("Vlad"))    # case folding must not grant access
+            self.assertFalse(h.is_dsm_admin("Someone"))
+        finally:
+            grp.getgrnam, pwd.getpwnam, os.getgrouplist = real_grp, real_pwd, real_list
+
+    def test_session_of_mixed_case_admin_is_accepted_end_to_end(self):
+        self.install_cgi(user="Vlad")
+        h.is_dsm_admin = lambda user: user.lower() == "vlad"
+        self.assertEqual(self.get(headers={"Cookie": "id=GOOD"})[0], 200)
+
 if __name__ == "__main__":
     unittest.main()

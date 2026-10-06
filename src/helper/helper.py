@@ -184,25 +184,40 @@ def run_authenticate_cgi(cookie, token, remote_addr, host):
 
 
 def is_dsm_admin(username):
-    """True when *username* belongs to the DSM administrators group."""
+    """True when *username* belongs to the DSM administrators group.
+
+    DSM user names are case-insensitive: authenticate.cgi may print "Vlad"
+    while the account is stored as "vlad", so both spellings are tried.
+    """
     try:
         group = grp.getgrnam(ADMIN_GROUP)
     except KeyError:
         return False
 
-    if username in group.gr_mem:
+    wanted = username.lower()
+
+    if any(member.lower() == wanted for member in group.gr_mem):
         return True
 
-    try:
-        entry = pwd.getpwnam(username)
-    except KeyError:
+    entry = None
+    system_name = username
+
+    for candidate in dict.fromkeys((username, wanted)):
+        try:
+            entry = pwd.getpwnam(candidate)
+            system_name = candidate
+            break
+        except KeyError:
+            continue
+
+    if entry is None:
         return False
 
     if entry.pw_gid == group.gr_gid:
         return True
 
     try:
-        return group.gr_gid in os.getgrouplist(username, entry.pw_gid)
+        return group.gr_gid in os.getgrouplist(system_name, entry.pw_gid)
     except OSError:
         return False
 
