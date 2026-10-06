@@ -50,6 +50,29 @@ To clean the build directory:
 
     make clean
 
+### Checksums
+
+Downloaded inputs (TorrServer and ffprobe) can be pinned in `checksums.sha256`.
+Generate the sums once, review them against the upstream release pages and
+commit the file:
+
+    make checksums
+
+From then on a build refuses a download whose SHA-256 differs, and CI refuses
+downloads that are not pinned. Pins are keyed by version, so bump them with
+`make checksums` after changing `TORRSERVER_VERSION` (delete `dest_bin` first if
+the binaries are already cached).
+
+### Tests
+
+No DSM is needed:
+
+    python3 -m unittest discover -s tests -v   # helper.py
+    sh tests/test_scripts.sh                   # package scripts, upgrade migration
+    bash tests/test_build.sh                   # checksum handling in build-package.sh
+
+CI runs all of them for every pull request and before every release.
+
 ### DSM permissions
 
 Saving settings, restarting the package from the Helper and certificate

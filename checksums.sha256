@@ -1,0 +1,3 @@
+# SHA-256 sums of downloaded build inputs: "<sha256>  <key>".
+# Generate with `make checksums`, review, then commit. As soon as this file
+# contains entries, CI refuses downloads that are not pinned here.

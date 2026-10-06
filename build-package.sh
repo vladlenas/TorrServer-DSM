@@ -5,6 +5,50 @@ TORRSERVER_VERSION=$1
 ARCH=$2
 PKG_VERSION=$3
 
+# Pinned SHA-256 sums of everything that is downloaded (one "<hash>  <key>" per
+# line). Without a pin a download is only trusted on first use:
+#   UPDATE_CHECKSUMS=1   pin sums that are not recorded yet (see `make checksums`)
+#   REQUIRE_CHECKSUMS=1  refuse downloads that have no pinned sum
+#   DOWNLOAD_ONLY=1      stop after downloading
+CHECKSUM_FILE="${CHECKSUM_FILE:-checksums.sha256}"
+
+sha256_of() {
+    sha256sum "$1" | awk '{print $1}'
+}
+
+verify_checksum() {
+    local file=$1
+    local key=$2
+    local actual expected
+
+    actual="$(sha256_of "${file}")"
+    expected=""
+
+    if [[ -f ${CHECKSUM_FILE} ]]; then
+        expected="$(awk -v k="${key}" '$2 == k {print $1; exit}' "${CHECKSUM_FILE}")"
+    fi
+
+    if [[ -n ${expected} ]]; then
+        if [[ ${expected} != "${actual}" ]]; then
+            rm -f "${file}"
+            echo "ERROR: checksum mismatch for ${key}" >&2
+            echo "  expected ${expected}" >&2
+            echo "  actual   ${actual}" >&2
+            exit 1
+        fi
+        echo ">>> Checksum OK: ${key}"
+    elif [[ ${UPDATE_CHECKSUMS:-0} == 1 ]]; then
+        echo "${actual}  ${key}" >> "${CHECKSUM_FILE}"
+        echo ">>> Pinned ${key}"
+    elif [[ ${REQUIRE_CHECKSUMS:-0} == 1 ]]; then
+        rm -f "${file}"
+        echo "ERROR: no pinned checksum for ${key} (run: make checksums)" >&2
+        exit 1
+    else
+        echo ">>> WARNING: no pinned checksum for ${key} (${actual})" >&2
+    fi
+}
+
 # Downloads are cached per version and written to a temporary file first, so a
 # changed TORRSERVER_VERSION is fetched again and an interrupted download is
 # never mistaken for a finished one.
@@ -43,6 +87,7 @@ download_torrserver() {
 
     if [[ -s ${dest_bin} ]]; then
         echo ">>> Binaries already exist: ${bin_name} (${TORRSERVER_VERSION})"
+        verify_checksum "${dest_bin}" "TorrServer-${TORRSERVER_VERSION}-linux-${ARCH}"
         return
     fi
 
@@ -55,6 +100,8 @@ download_torrserver() {
         echo "ERROR: ${bin_name} is not an ELF binary" >&2
         exit 1
     fi
+
+    verify_checksum "${dest_bin}" "TorrServer-${TORRSERVER_VERSION}-linux-${ARCH}"
 }
 
 download_ffprobe() {
@@ -89,6 +136,8 @@ download_ffprobe() {
     mkdir -p "${dest_bin}" "${tmp_dir}"
 
     download_file "${ffprobe_url}" "${tmp_dir}/ffprobe.zip"
+    # Verify the archive before it is unpacked.
+    verify_checksum "${tmp_dir}/ffprobe.zip" "$(basename "${ffprobe_url}")"
     unzip -q "${tmp_dir}/ffprobe.zip" -d "${tmp_dir}"
 
     mv "${tmp_dir}/ffprobe" "${ffprobe_bin}"
@@ -167,6 +216,12 @@ main() {
 
     download_ffprobe
     download_torrserver
+
+    if [[ ${DOWNLOAD_ONLY:-0} == 1 ]]; then
+        echo ">>> Download only, skipping package build"
+        return
+    fi
+
     make_pkg
 
     echo ">>> Done"

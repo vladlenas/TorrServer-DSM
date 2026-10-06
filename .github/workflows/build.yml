@@ -10,6 +10,10 @@ permissions:
   contents: write
 
 jobs:
+  test:
+    name: Tests
+    uses: ./.github/workflows/tests.yml
+
   check-version:
     name: Check package version
     runs-on: ubuntu-latest
@@ -64,7 +68,9 @@ jobs:
 
   build:
     name: Build SPK packages
-    needs: check-version
+    needs:
+      - check-version
+      - test
     if: needs.check-version.outputs.version_changed == 'true'
     runs-on: ubuntu-latest
 
@@ -82,6 +88,11 @@ jobs:
 
       - name: Build SPK packages
         run: |
+          # Opt-in: once checksums.sha256 has entries, downloads that are not
+          # pinned there are refused (see `make checksums`).
+          if grep -qE '^[0-9a-f]{64} ' checksums.sha256; then
+            export REQUIRE_CHECKSUMS=1
+          fi
           make
 
       - name: List build results

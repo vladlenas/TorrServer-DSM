@@ -140,7 +140,7 @@ OBSOLETE_VAR_FILES="torrserver.fuse.path TorrServer_temp.log Helper.log.1"
 # Files holding package settings (not TorrServer's own database/torrents).
 SETTINGS_VAR_FILES="torrserver.port torrserver.auth accs.db torrserver.dir torrserver.fuse
 torrserver.https torrserver.https.port torrserver.force.https torrserver.ssl.mode
-torrserver.ssl.cert torrserver.ssl.key cache.path helper.language"
+torrserver.ssl.cert torrserver.ssl.key cache.path cache.pending helper.language"
 
 remove_var_file()
 {

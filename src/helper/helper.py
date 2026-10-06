@@ -28,7 +28,8 @@ MAX_POST_BYTES = 64 * 1024
 USERNAME_MAX_LENGTH = 64
 
 PACKAGE_NAME = "TorrServer"
-PACKAGE_VAR = "/var/packages/TorrServer/var"
+# TORRSERVER_DSM_VAR exists for the test suite; DSM never sets it.
+PACKAGE_VAR = os.environ.get("TORRSERVER_DSM_VAR") or "/var/packages/TorrServer/var"
 TORRSERVER_BIN = "/var/packages/TorrServer/target/bin/TorrServer"
 TORRSERVER_LOG = os.path.join(PACKAGE_VAR, "TorrServer.log")
 
@@ -49,6 +50,9 @@ AUTH_FILE = os.path.join(PACKAGE_VAR, "torrserver.auth")
 ACCS_FILE = os.path.join(PACKAGE_VAR, "accs.db")
 TORRSERVER_DIR_FILE = os.path.join(PACKAGE_VAR, "torrserver.dir")
 CACHE_PATH_FILE = os.path.join(PACKAGE_VAR, "cache.path")
+# Cache directory chosen while TorrServer was not running; applied by
+# pending_cache_loop() as soon as the API answers.
+CACHE_PENDING_FILE = os.path.join(PACKAGE_VAR, "cache.pending")
 FUSE_FILE = os.path.join(PACKAGE_VAR, "torrserver.fuse")
 HTTPS_FILE = os.path.join(PACKAGE_VAR, "torrserver.https")
 HTTPS_PORT_FILE = os.path.join(PACKAGE_VAR, "torrserver.https.port")
@@ -104,21 +108,91 @@ def load_locale(language=None):
         return {}
 
 
+_HTML_TOKEN_RE = re.compile(
+    r"(<script\b[^>]*>)(.*?)(</script>)"      # 1-3: script open / body / close
+    r"|<style\b.*?</style>"                   # style: never translated
+    r"|<!--.*?-->"                             # comments: never translated
+    r"|<[^>]+>",                               # any other tag
+    re.S | re.I,
+)
+_TRANSLATABLE_ATTR_RE = re.compile(
+    r"""(\b(?:placeholder|title|alt|aria-label)\s*=\s*)("[^"]*"|'[^']*')""",
+    re.I,
+)
+
+
 def localize_html(content):
-    translations = load_locale()
+    """Translate English source strings in rendered HTML.
+
+    Locale files use the English text as key. Only text that is meant for the
+    reader is translated:
+
+    * text nodes,
+    * the placeholder / title / alt / aria-label attributes,
+    * string literals inside <script> (the key must start right after a quote).
+
+    Everything else (``value``, ``href``, ``id``, ``onclick``, identifiers in
+    scripts, CSS, ``data:`` URIs) is left untouched, so form values typed by
+    the user, paths and embedded images can never be altered by a translation.
+    """
+    translations = {
+        source: str(translated)
+        for source, translated in load_locale().items()
+        if source and source != str(translated)
+    }
     if not translations:
         return content
 
-    # Locale files use English source strings as keys. Replace only textual
-    # strings; URLs, paths and program identifiers are intentionally untouched.
-    for source, translated in sorted(
-        translations.items(),
-        key=lambda item: len(item[0]),
-        reverse=True
-    ):
-        if source and source != translated:
-            content = content.replace(source, str(translated))
-    return content
+    ordered = sorted(translations, key=len, reverse=True)
+
+    # Keys that contain markup (e.g. <b>..</b>) span several tokens, so they
+    # are applied to the whole document first. They are full sentences, so an
+    # accidental match elsewhere is not a practical concern.
+    for source in ordered:
+        if "<" in source:
+            content = content.replace(source, translations[source])
+
+    plain = [source for source in ordered if "<" not in source]
+    if not plain:
+        return content
+
+    text_re = re.compile("|".join(re.escape(source) for source in plain))
+    script_re = re.compile(
+        "(?<=['\"])(?:" + "|".join(re.escape(source) for source in plain) + ")"
+    )
+
+    def translate_text(text):
+        return text_re.sub(lambda m: translations[m.group(0)], text)
+
+    def translate_script(text):
+        return script_re.sub(lambda m: translations[m.group(0)], text)
+
+    def translate_tag(tag):
+        return _TRANSLATABLE_ATTR_RE.sub(
+            lambda m: m.group(1) + translate_text(m.group(2)), tag
+        )
+
+    parts = []
+    position = 0
+
+    for match in _HTML_TOKEN_RE.finditer(content):
+        parts.append(translate_text(content[position:match.start()]))
+
+        token = match.group(0)
+
+        if match.group(1) is not None:
+            parts.append(match.group(1))
+            parts.append(translate_script(match.group(2)))
+            parts.append(match.group(3))
+        elif token.startswith("<") and not re.match(r"<(?:style|!--)", token, re.I):
+            parts.append(translate_tag(token))
+        else:
+            parts.append(token)
+
+        position = match.end()
+
+    parts.append(translate_text(content[position:]))
+    return "".join(parts)
 
 
 def language_selector():
@@ -764,11 +838,19 @@ def _local_tls_context():
 
 
 def torrserver_api(payload, http_port=None):
+    """Return ``(True, data)`` or ``(False, error_message)``; see
+    :func:`torrserver_request`."""
+    ok, data, _reachable = torrserver_request(payload, http_port)
+    return ok, data
+
+
+def torrserver_request(payload, http_port=None):
     """POST *payload* to the running TorrServer ``/settings`` endpoint.
 
     Tries HTTP first (the running instance may still be HTTP although the
-    saved flags already say HTTPS), then HTTPS. Returns ``(True, data)`` or
-    ``(False, error_message)``.
+    saved flags already say HTTPS), then HTTPS. Returns
+    ``(ok, data_or_error, reachable)``; *reachable* is False only when no
+    endpoint could be contacted at all (TorrServer is not running).
     """
     http_port = get_port() if http_port is None else int(http_port)
     https_port = get_https_port()
@@ -783,6 +865,7 @@ def torrserver_api(payload, http_port=None):
     body = json.dumps(payload).encode("utf-8")
     auth_header = get_api_auth_header()
     last_error = None
+    reachable = False
 
     for url, context in endpoints:
         request = urllib.request.Request(
@@ -803,20 +886,24 @@ def torrserver_api(payload, http_port=None):
             with opener.open(request, timeout=5) as response:
                 raw = response.read().decode("utf-8", errors="replace")
 
+            reachable = True
+
             if not raw.strip():
-                return True, {}
+                return True, {}, True
 
             try:
-                return True, json.loads(raw)
+                return True, json.loads(raw), True
             except ValueError:
                 last_error = "unexpected response from TorrServer"
 
         except urllib.error.HTTPError as e:
+            # The server answered (e.g. 401, or a redirect to HTTPS).
+            reachable = True
             last_error = "HTTP Error {}: {}".format(e.code, e.reason)
         except Exception as e:
             last_error = str(e)
 
-    return False, last_error or "request failed"
+    return False, last_error or "request failed", reachable
 
 
 def _find_key(data, name):
@@ -851,29 +938,60 @@ def get_cache_path():
 
 
 def set_cache_path(cache_path, port=None):
+    """Apply the cache directory to the running TorrServer.
+
+    Returns ``(status, message)`` where status is ``"applied"``, ``"pending"``
+    (TorrServer is not running; applied automatically once it is) or
+    ``"error"``.
+    """
     # TorrServer's "set" replaces the whole settings object, so read the
     # current settings, change one field and send everything back. Sending a
     # partial object would reset every other TorrServer setting.
-    ok, data = torrserver_api({"action": "get"}, port)
+    ok, data, reachable = torrserver_request({"action": "get"}, port)
+
     if not ok:
-        return False, (
-            "Unable to read TorrServer settings (is TorrServer running?): {}"
-            .format(data)
-        )
+        if not reachable:
+            write_file(CACHE_PENDING_FILE, cache_path)
+            return "pending", "TorrServer is not running"
+
+        return "error", "Unable to read TorrServer settings: {}".format(data)
 
     if not isinstance(data, dict) or not data:
-        return False, "Unable to read TorrServer settings: empty response"
+        return "error", "Unable to read TorrServer settings: empty response"
 
     key = _find_key(data, "TorrentsSavePath") or "TorrentsSavePath"
 
     if data.get(key) != cache_path:
         data[key] = cache_path
-        ok, result = torrserver_api({"action": "set", "sets": data}, port)
+        ok, result, _reachable = torrserver_request(
+            {"action": "set", "sets": data}, port
+        )
         if not ok:
-            return False, "Unable to apply cache directory: {}".format(result)
+            return "error", "Unable to apply cache directory: {}".format(result)
 
     write_file(CACHE_PATH_FILE, cache_path)
-    return True, ""
+    remove_file(CACHE_PENDING_FILE)
+    return "applied", ""
+
+
+def remove_file(path):
+    try:
+        os.unlink(path)
+    except OSError:
+        pass
+
+
+def apply_pending_cache_path():
+    """Apply a cache directory saved while TorrServer was down.
+
+    Returns True when nothing is left to do.
+    """
+    cache_path = read_file(CACHE_PENDING_FILE, "")
+    if not cache_path:
+        return True
+
+    status, _message = set_cache_path(cache_path)
+    return status == "applied"
 
 
 PASSWORD_PLACEHOLDER = "••••••••"
@@ -1061,9 +1179,10 @@ def save_settings(params):
     if not ok:
         return False, directory_message
 
-    # TorrServer is still listening on old_port at this point.
-    ok, cache_message = set_cache_path(get_cache_dir(torrserver_dir), old_port)
-    if not ok:
+    # TorrServer is still listening on old_port at this point. If it is not
+    # running at all the change is queued and applied when it starts.
+    status, cache_message = set_cache_path(get_cache_dir(torrserver_dir), old_port)
+    if status == "error":
         return False, cache_message
 
     try:
@@ -1082,6 +1201,9 @@ def save_settings(params):
         write_file(SSL_KEY_FILE, ssl_key)
     except OSError as e:
         return False, "Unable to write settings: {}".format(e)
+
+    if status == "pending":
+        return True, "Settings saved. The cache directory is applied when TorrServer starts"
 
     return True, "Settings saved"
 
@@ -3170,6 +3292,21 @@ class Handler(BaseHTTPRequestHandler):
         return
 
 
+PENDING_POLL_SECONDS = 5
+
+
+def pending_cache_loop():
+    while True:
+        try:
+            if not apply_pending_cache_path():
+                time.sleep(PENDING_POLL_SECONDS)
+                continue
+        except Exception:
+            pass
+
+        time.sleep(PENDING_POLL_SECONDS * 2)
+
+
 def log_rotation_loop():
     while True:
         rotate_log_if_needed()
@@ -3188,6 +3325,12 @@ def run():
         daemon=True,
     )
     rotation_thread.start()
+
+    pending_thread = threading.Thread(
+        target=pending_cache_loop,
+        daemon=True,
+    )
+    pending_thread.start()
 
     try:
         server.serve_forever()
