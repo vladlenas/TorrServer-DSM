@@ -74,20 +74,36 @@ No DSM is needed:
 
 CI runs all of them for every pull request and before every release.
 
-### DSM permissions
+### Folder access and optional DSM permissions
 
-Saving settings, restarting the package from the Helper and certificate
-synchronization need a one-time sudo rule. Open **DSM Task Scheduler**, create a
-**User-defined script** task, select **root** as the user, and run once:
+**Nothing here needs to be set up for a normal install.** TorrServer and the
+Helper work out of the box; you can change the port, the password, HTTPS with
+the built-in certificate and FUSE right away.
+
+The only thing the Helper needs is a folder for the cache. Pick it with the
+**Browse** button. If the service user may write there, the Helper creates
+`Cache` and `FUSE` itself. If it may not, it tells you how to fix that the
+standard DSM way:
+
+> Control Panel → Shared Folder → select the folder → Edit → Permissions →
+> **System internal user** → give **TorrServer** *Read/Write*.
+
+Some things need root and are therefore **optional**. Without the permissions
+below they are simply unavailable (the rest keeps working):
+
+- restarting TorrServer from the Helper (restart it from DSM Package Center
+  instead),
+- certificates taken from DSM or from a manual path,
+- creating `Cache`/`FUSE` in a folder the service user cannot write to.
+
+To enable them, open **DSM Task Scheduler**, create a **User-defined script**
+task, select **root** as the user, and run once:
 
     /var/packages/TorrServer/scripts/setup-permissions
 
-Without it TorrServer itself runs normally, but the Helper is read-only. The
-Helper shows the same instruction in a separate window and can check whether
-the permission is configured.
-
-The rule is not removed automatically on uninstall (package scripts do not run
-as root). Remove it with:
+The Helper shows the same instruction in a separate window and can check
+whether the permission is configured. The rule is not removed automatically on
+uninstall (package scripts do not run as root). Remove it with:
 
     sudo rm -f /etc/sudoers.d/TorrServer
 
@@ -113,10 +129,11 @@ the self-signed certificate mode, a stale `server.pem` / `server.key`). To
 start from defaults, tick **Reset package settings to defaults** in the upgrade
 wizard.
 
-The sudo rule is written once and is **not** refreshed by an upgrade. If you
-upgrade from a version older than the one that introduced `prepare-directory`,
-run `setup-permissions` again (see *DSM permissions*); until then the Helper
-reports that permissions are out of date. Torrents and TorrServer's own database are not touched by the reset.
+The optional sudo rule is written once and is **not** refreshed by an upgrade.
+If you enabled it with a version older than the one that introduced
+`prepare-directory`, run `setup-permissions` again (see *Folder access and
+optional DSM permissions*); until then the Helper treats the optional features
+as unavailable. Torrents and TorrServer's own database are not touched by the reset.
 
 ## TorrServer Version
 

@@ -931,12 +931,72 @@ def get_torrserver_uptime():
         return "Unknown"
 
 
-def prepare_torrserver_directory(torrserver_dir):
-    if not os.path.isfile(PREPARE_DIRECTORY):
-        return False, "Directory preparation script not found"
+NOT_WRITABLE = (
+    "The TorrServer service user cannot write to this folder. Give the TorrServer "
+    "user Read/Write permission on the shared folder (DSM Control Panel → Shared "
+    "Folder → Edit → Permissions → System internal user), or enable the optional "
+    "DSM permissions on the DSM permissions page."
+)
 
+SUBDIRECTORIES = ("Cache", "FUSE")
+
+
+def prepare_directory_directly(torrserver_dir):
+    """Create Cache and FUSE as the service user, without root.
+
+    Returns True when both exist and are writable, False when root is needed
+    (the service user may not write there). Raises ValueError for a problem
+    that root would not fix either.
+    """
+    for name in SUBDIRECTORIES:
+        path = os.path.join(torrserver_dir, name)
+
+        if os.path.islink(path):
+            raise ValueError(
+                "TorrServer subdirectory must not be a symbolic link: {}".format(path)
+            )
+
+        if os.path.exists(path):
+            if not os.path.isdir(path):
+                raise ValueError(
+                    "TorrServer subdirectory is not a directory: {}".format(path)
+                )
+
+            if not os.access(path, os.W_OK | os.X_OK):
+                return False
+
+            continue
+
+        try:
+            os.mkdir(path, 0o755)
+        except PermissionError:
+            return False
+        except FileExistsError:
+            continue
+        except OSError as e:
+            raise ValueError("Failed to create {}: {}".format(path, e))
+
+    return True
+
+
+def prepare_torrserver_directory(torrserver_dir):
     if not torrserver_dir:
         return False, "Choose the TorrServer directory with the Browse button"
+
+    # Normal case: the user gave the service user access to the share (the
+    # usual DSM way), so no root is needed at all.
+    try:
+        if prepare_directory_directly(torrserver_dir):
+            return True, ""
+    except ValueError as e:
+        return False, str(e)
+
+    # Otherwise ask the root helper, which needs the optional permissions.
+    if not has_privileged_access():
+        return False, NOT_WRITABLE
+
+    if not os.path.isfile(PREPARE_DIRECTORY):
+        return False, "Directory preparation script not found"
 
     try:
         result = subprocess.run(
@@ -949,7 +1009,7 @@ def prepare_torrserver_directory(torrserver_dir):
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             stdin=subprocess.DEVNULL,
-            text=True,
+            universal_newlines=True,
             timeout=15,
         )
 
@@ -1319,11 +1379,13 @@ def save_settings(params):
 
     # ---- 1. Validate everything first; nothing is changed until all pass.
 
-    if not has_privileged_access():
-        return False, PERMISSIONS_OUTDATED
-
     if ssl_mode not in (SSL_CERT_MODE_SELF, SSL_CERT_MODE_DSM, SSL_CERT_MODE_MANUAL):
         return False, "Invalid certificate mode"
+
+    # Everything else works without root. Only certificates that have to be
+    # copied from DSM (or from a root-readable path) need the optional rule.
+    if ssl_mode != SSL_CERT_MODE_SELF and not has_privileged_access():
+        return False, "Additional DSM permissions are required for DSM and manual certificates."
 
     if not torrserver_dir:
         return False, "Choose the TorrServer directory with the Browse button"
@@ -3036,13 +3098,13 @@ toggleSslMode();
 toggleAuth();
 </script>
 """.format(
-        "disabled" if not privileged else "",
+        "",
         port,
         html.escape(torrserver_dir, quote=True),
         "checked" if fuse else "",
-        "disabled" if not privileged else "",
+        "",
         "checked" if https else "",
-        "disabled" if not privileged else "",
+        "",
         https_port,
         "checked" if force_https else "",
         "" if https else "disabled",
@@ -3069,7 +3131,6 @@ toggleAuth();
         html.escape(PASSWORD_PLACEHOLDER if saved_password else "", quote=True),
         "" if auth else "disabled",
         "" if privileged else "disabled",
-        "disabled" if not privileged else "",
     )
 
     body += page_footer()

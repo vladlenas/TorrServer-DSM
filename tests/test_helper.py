@@ -5,6 +5,7 @@ Run:  python3 -m unittest discover -s tests -v
 import importlib.util
 import json
 import os
+import re
 import shutil
 import socket
 import tempfile
@@ -231,12 +232,43 @@ class SaveSettingsTests(Base):
         self.assertTrue(self.save()[0])
         self.assertFalse(self.save(https="1")[0])
 
-    def test_missing_permissions_give_the_actionable_message(self):
+    def test_settings_save_without_any_extra_permissions(self):
+        """The common case: no sudo rule, self-signed certificate."""
         h.has_privileged_access = lambda use_cache=True: False
         ok, message = self.save()
-        self.assertFalse(ok)
-        self.assertIn("setup-permissions", message)
+        self.assertTrue(ok, message)
+        self.assertEqual(h.read_file(h.PORT_FILE), "8090")
+
+    def test_every_non_certificate_option_saves_without_permissions(self):
+        h.has_privileged_access = lambda use_cache=True: False
+        ok, message = self.save(port="9090", https="1", https_port="9443", force_https="1",
+                                fuse="1", auth="1", username="alice", password="pw")
+        self.assertTrue(ok, message)
+        self.assertEqual(h.read_file(h.HTTPS_FILE), "1")
+        self.assertEqual(h.read_file(h.FUSE_FILE), "1")
+        self.assertEqual(json.load(open(h.ACCS_FILE)), {"alice": "pw"})
+
+    def test_dsm_and_manual_certificates_need_the_optional_permissions(self):
+        h.has_privileged_access = lambda use_cache=True: False
+        h.get_dsm_certificates = lambda: [{"cert": "/usr/syno/c.pem", "key": "/usr/syno/k.pem", "label": "x"}]
+        for mode, cert, key in (("dsm", "/usr/syno/c.pem", "/usr/syno/k.pem"),
+                                ("manual", "/volume1/c.pem", "/volume1/k.pem")):
+            ok, message = self.save(ssl_mode=mode, ssl_cert=cert, ssl_key=key)
+            self.assertFalse(ok, mode)
+            self.assertIn("DSM permissions", message)
         self.assertFalse(os.path.exists(h.PORT_FILE), "nothing may be written")
+
+    def test_certificates_work_once_permissions_exist(self):
+        h.has_privileged_access = lambda use_cache=True: True
+        ok, message = self.save(ssl_mode="manual", ssl_cert="/volume1/c.pem", ssl_key="/volume1/k.pem")
+        self.assertTrue(ok, message)
+
+    def test_a_directory_the_service_user_cannot_write_is_explained(self):
+        h.has_privileged_access = lambda use_cache=True: False
+        h.prepare_torrserver_directory = lambda d: (False, h.NOT_WRITABLE)
+        ok, message = self.save()
+        self.assertEqual((ok, message), (False, h.NOT_WRITABLE))
+        self.assertFalse(os.path.exists(h.PORT_FILE))
 
     def test_saves_when_torrserver_is_down(self):
         self.ts.close()
@@ -319,7 +351,14 @@ class PrivilegeTests(Base):
         h.has_privileged_access()
         self.assertEqual(len(self.calls), count)
 
+    def patch(self, name, value):
+        old = getattr(h, name)
+        setattr(h, name, value)
+        self.addCleanup(setattr, h, name, old)
+
     def test_raw_sudo_error_becomes_actionable_message(self):
+        self.patch("prepare_directory_directly", lambda d: False)     # service user cannot write
+        self.patch("has_privileged_access", lambda use_cache=True: True)
         self.fake_sudo(prepare=(1, self.DENIED))
         ok, message = h.prepare_torrserver_directory("/volume1/TS")
         self.assertFalse(ok)
@@ -327,6 +366,8 @@ class PrivilegeTests(Base):
         self.assertIn("setup-permissions", message)
 
     def test_real_script_errors_are_passed_through(self):
+        self.patch("prepare_directory_directly", lambda d: False)
+        self.patch("has_privileged_access", lambda use_cache=True: True)
         self.fake_sudo(prepare=(1, "Invalid TorrServer directory.\n"))
         self.assertEqual(h.prepare_torrserver_directory("/etc"), (False, "Invalid TorrServer directory."))
 
@@ -335,6 +376,161 @@ class PrivilegeTests(Base):
         ok, message = h.prepare_torrserver_directory("")
         self.assertFalse(ok)
         self.assertIn("Browse", message)
+
+
+class DirectoryTests(Base):
+    """Cache/FUSE are created as the service user; root is only a fallback."""
+
+    def setUp(self):
+        super().setUp()
+        self.base = tempfile.mkdtemp(prefix="ts-dir-")
+        self.addCleanup(shutil.rmtree, self.base, True)
+        self.sudo_calls = []
+        self.privileged = False
+        self.real = (h.subprocess.run, h.has_privileged_access, os.mkdir, os.access)
+        h.has_privileged_access = lambda use_cache=True: self.privileged
+
+        def run(cmd, **kwargs):
+            self.sudo_calls.append(cmd)
+            return type("R", (), {"returncode": 0, "stderr": "", "stdout": ""})()
+        h.subprocess.run = run
+        self.addCleanup(lambda: (setattr(h.subprocess, "run", self.real[0]),
+                                 setattr(h, "has_privileged_access", self.real[1]),
+                                 setattr(os, "mkdir", self.real[2]),
+                                 setattr(os, "access", self.real[3])))
+
+    def deny_creation(self):
+        def mkdir(path, mode=0o777, **kw):
+            raise PermissionError(13, "Permission denied", path)
+        os.mkdir = mkdir
+
+    def test_no_root_needed_when_the_service_user_can_write(self):
+        ok, message = h.prepare_torrserver_directory(self.base)
+        self.assertEqual((ok, message), (True, ""))
+        for name in ("Cache", "FUSE"):
+            self.assertTrue(os.path.isdir(os.path.join(self.base, name)), name)
+        self.assertEqual(self.sudo_calls, [], "sudo must not be involved")
+
+    def test_existing_writable_directories_are_accepted(self):
+        for name in ("Cache", "FUSE"):
+            os.mkdir(os.path.join(self.base, name))
+        self.assertEqual(h.prepare_torrserver_directory(self.base), (True, ""))
+        self.assertEqual(self.sudo_calls, [])
+
+    def test_not_writable_without_permissions_explains_the_standard_dsm_fix(self):
+        self.deny_creation()
+        ok, message = h.prepare_torrserver_directory(self.base)
+        self.assertFalse(ok)
+        self.assertEqual(message, h.NOT_WRITABLE)
+        self.assertIn("System internal user", message)
+        self.assertEqual(self.sudo_calls, [], "never call sudo when it is not configured")
+
+    def test_not_writable_with_permissions_falls_back_to_root(self):
+        self.deny_creation()
+        self.privileged = True
+        ok, _ = h.prepare_torrserver_directory(self.base)
+        self.assertTrue(ok)
+        (cmd,) = self.sudo_calls
+        self.assertEqual(cmd, ["/bin/sudo", "-n", h.PREPARE_DIRECTORY, self.base])
+
+    def test_existing_directory_that_is_not_writable_needs_root(self):
+        for name in ("Cache", "FUSE"):
+            os.mkdir(os.path.join(self.base, name))
+        os.access = lambda path, mode: False
+        self.assertEqual(h.prepare_torrserver_directory(self.base), (False, h.NOT_WRITABLE))
+
+    def test_symlinks_are_refused_even_with_root_available(self):
+        self.privileged = True
+        os.symlink("/etc", os.path.join(self.base, "Cache"))
+        ok, message = h.prepare_torrserver_directory(self.base)
+        self.assertFalse(ok)
+        self.assertIn("symbolic link", message)
+        self.assertEqual(self.sudo_calls, [])
+
+    def test_a_file_where_a_directory_belongs_is_refused(self):
+        open(os.path.join(self.base, "FUSE"), "w").close()
+        ok, message = h.prepare_torrserver_directory(self.base)
+        self.assertFalse(ok)
+        self.assertIn("not a directory", message)
+
+    def test_missing_parent_is_reported_not_sent_to_root(self):
+        self.privileged = True
+        ok, message = h.prepare_torrserver_directory(os.path.join(self.base, "missing"))
+        self.assertFalse(ok)
+        self.assertIn("Failed to create", message)
+        self.assertEqual(self.sudo_calls, [])
+
+    def test_concurrent_creation_is_tolerated(self):
+        real = os.mkdir
+        def racing(path, mode=0o777, **kw):
+            real(path, mode)
+            raise FileExistsError(17, "File exists", path)
+        os.mkdir = racing
+        self.assertEqual(h.prepare_torrserver_directory(self.base), (True, ""))
+
+
+class FormTests(Base):
+    """What the settings form lets an ordinary (no extra permissions) user do."""
+
+    def render(self, privileged):
+        self.saved = (h.has_privileged_access, h.get_dsm_certificates)
+        self.addCleanup(lambda: (setattr(h, "has_privileged_access", self.saved[0]),
+                                 setattr(h, "get_dsm_certificates", self.saved[1])))
+        h.has_privileged_access = lambda use_cache=True: privileged
+        h.get_dsm_certificates = lambda: []
+        return h.settings_page()
+
+    def tag(self, page, pattern):
+        match = re.search(pattern, page)
+        self.assertIsNotNone(match, pattern)
+        return match.group(0)
+
+    def test_nothing_that_needs_no_root_is_locked(self):
+        page = self.render(privileged=False)
+        for pattern in (r"<fieldset[^>]*>", r'<input[^>]*name="port"[^>]*>',
+                        r'<input[^>]*name="torrserver_dir"[^>]*>', r'<input[^>]*name="fuse"[^>]*>',
+                        r'<input[^>]*name="https"[^>]*>', r'<option value="self"[^>]*>',
+                        r'<input[^>]*name="auth"[^>]*>', r'<button type="submit"[^>]*>Save'):
+            self.assertNotIn("disabled", self.tag(page, pattern), pattern)
+
+    def test_root_only_choices_are_locked_without_permissions(self):
+        page = self.render(privileged=False)
+        for pattern in (r'<option value="dsm"[^>]*>', r'<option value="manual"[^>]*>',
+                        r'<button[^>]*formaction="./restart"[^>]*>'):
+            self.assertIn("disabled", self.tag(page, pattern), pattern)
+
+    def test_everything_is_available_with_permissions(self):
+        page = self.render(privileged=True)
+        for pattern in (r'<option value="dsm"[^>]*>', r'<option value="manual"[^>]*>',
+                        r'<button[^>]*formaction="./restart"[^>]*>', r"<fieldset[^>]*>"):
+            self.assertNotIn("disabled", self.tag(page, pattern), pattern)
+
+
+
+class MessageTranslationTests(Base):
+    """Messages are shown HTML-escaped, so the locale key must match that form."""
+
+    def messages(self):
+        return [h.NOT_WRITABLE, h.PERMISSIONS_OUTDATED,
+                "Choose the TorrServer directory with the Browse button",
+                "Additional DSM permissions are required for DSM and manual certificates."]
+
+    def test_messages_are_translated_after_escaping(self):
+        import html as html_module
+        for lang in ("ru", "uk"):
+            h.write_file(h.LANGUAGE_FILE, lang)
+            for message in self.messages():
+                shown = '<div class="notice">%s</div>' % html_module.escape(message)
+                # KeyError here means the message has no translation key at all.
+                expected = h.load_locale(lang)[message]
+                self.assertNotEqual(expected, message)
+                self.assertEqual(h.localize_html(shown), '<div class="notice">%s</div>' % expected,
+                                 (lang, message[:50]))
+
+    def test_every_locale_has_the_same_keys(self):
+        locales = {l: set(h.load_locale(l)) for l in ("en", "ru", "uk", "lt", "pl")}
+        for lang, keys in locales.items():
+            self.assertEqual(locales["en"] - keys, set(), lang + " is missing keys")
 
 
 class LogRotationTests(Base):
