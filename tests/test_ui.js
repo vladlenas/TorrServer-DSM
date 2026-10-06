@@ -15,6 +15,7 @@ function load(env) {
     const frames = {};
     const requests = [];
     const defined = {};
+    let getDomCalls = 0;
 
     const Ext = {
         namespace(name) {
@@ -23,7 +24,12 @@ function load(env) {
         apply(target, source) { return Object.assign(target, source); },
         define(name, cfg) { defined[name] = cfg; },
         decode: JSON.parse,
-        getDom(id) { return frames[id]; },
+        getDom(id) {
+            getDomCalls++;
+            if (env.frameAppearsAfter !== undefined && getDomCalls <= env.frameAppearsAfter) { return null; }
+            if (env.noFrame) { return null; }
+            return frames[id];
+        },
         Ajax: {
             defaultHeaders: env.defaultHeaders,
             extraParams: env.extraParams,
@@ -43,10 +49,20 @@ function load(env) {
         window: { console: { log: (m) => logs.push(m) }, SynoToken: env.windowToken },
         console: { log: (m) => logs.push(m) },
         encodeURIComponent, JSON, setImmediate,
+        // Polling runs on fast timers so "never appears" does not take 10 s.
+        setTimeout: (fn) => setImmediate(fn),
     };
     vm.createContext(sandbox);
     vm.runInContext(SOURCE, sandbox);
-    frames["torrserver-helper-frame"] = { src: "" };
+    const attrs = {};
+    frames["torrserver-helper-frame"] = {
+        src: "", srcWrites: 0,
+        getAttribute: (k) => attrs[k] || null,
+        setAttribute: (k, v) => { attrs[k] = v; },
+    };
+    const frame = frames["torrserver-helper-frame"];
+    let srcValue = "";
+    Object.defineProperty(frame, "src", { get: () => srcValue, set: (v) => { srcValue = v; frame.srcWrites++; } });
     return { sandbox, utils: sandbox.SYNO.SDS.TorrServer.Utils, frame: frames["torrserver-helper-frame"], logs, requests, defined };
 }
 
@@ -57,7 +73,7 @@ async function test(name, fn) {
 }
 const loadHelper = (ctx) => new Promise((resolve) => {
     ctx.utils.loadHelper();
-    setTimeout(resolve, 20);
+    setTimeout(resolve, 60);
 });
 
 (async () => {
@@ -121,27 +137,73 @@ const loadHelper = (ctx) => new Promise((resolve) => {
         assert(ctx.frame.src.endsWith("?SynoToken=OK"));
     });
 
-    await test("opening the window loads the helper after the frame is rendered", async () => {
-        const ctx = load({ session: { SynoToken: "WINTOK" } });
+    // Runs the real MainWindow constructor against a fake window object.
+    function openWindow(ctx, { fireAfterRender }) {
         const Win = ctx.defined["SYNO.SDS.TorrServer.MainWindow"];
-        assert(Win && typeof Win.constructor === "function", "MainWindow is defined");
-
-        // Run the real constructor against a fake window object.
         const handlers = [];
         const fakeWindow = { on(event, fn, scope, opts) { handlers.push({ event, fn, scope, opts }); } };
         const MY = vm.runInContext("SYNO.SDS.TorrServer", ctx.sandbox);
-        MY.MainWindow = { superclass: { constructor() { MY.superCalled = true; } } };
+        MY.MainWindow = { superclass: { constructor() {}, onOpen() { MY.parentOpenCalled = true; } } };
         Win.constructor.call(fakeWindow, {});
+        if (fireAfterRender) {
+            const hook = handlers.find((h) => h.event === "afterrender");
+            assert(hook && hook.opts && hook.opts.single, "afterrender handler registered once-only");
+            hook.fn.call(hook.scope);
+        }
+        return { Win, fakeWindow, MY };
+    }
+    const settle = (ms) => new Promise((r) => setTimeout(r, ms || 80));
 
-        assert(MY.superCalled, "parent constructor ran");
-        assert.strictEqual(ctx.frame.src, "", "nothing is loaded before the window is rendered");
-        const hook = handlers.find((h) => h.event === "afterrender");
-        assert(hook, "an afterrender handler is registered");
-        assert(hook.opts && hook.opts.single, "and it only fires once");
+    await test("the helper loads even if DSM never fires afterrender (the blank-window bug)", async () => {
+        const ctx = load({ session: { SynoToken: "TOK" } });
+        openWindow(ctx, { fireAfterRender: false });
+        await settle();
+        assert.strictEqual(ctx.frame.src, "/webman/3rdparty/TorrServer/helper/?SynoToken=TOK");
+    });
 
-        hook.fn.call(hook.scope);
-        await new Promise((r) => setTimeout(r, 20));
-        assert.strictEqual(ctx.frame.src, "/webman/3rdparty/TorrServer/helper/?SynoToken=WINTOK");
+    await test("the helper loads when the iframe only appears a little later", async () => {
+        const ctx = load({ session: { SynoToken: "TOK" }, frameAppearsAfter: 7 });
+        openWindow(ctx, { fireAfterRender: false });
+        await settle(150);
+        assert(ctx.frame.src.endsWith("?SynoToken=TOK"));
+    });
+
+    await test("gives up quietly (and says so in the console) if the iframe never appears", async () => {
+        const ctx = load({ session: { SynoToken: "TOK" }, noFrame: true });
+        openWindow(ctx, { fireAfterRender: false });
+        await settle(300);
+        assert.strictEqual(ctx.frame.src, "");
+        assert(ctx.logs.some((l) => l.includes("never created")));
+    });
+
+    await test("constructor, afterrender and onOpen together load the frame exactly once", async () => {
+        const ctx = load({ login: JSON.stringify({ SynoToken: "REMOTETOK" }) });
+        const { Win, fakeWindow, MY } = openWindow(ctx, { fireAfterRender: true });
+        Win.onOpen.call(fakeWindow);
+        Win.onOpen.call(fakeWindow);
+        await settle(150);
+        assert(MY.parentOpenCalled, "DSM's own onOpen still runs");
+        assert.strictEqual(ctx.frame.srcWrites, 1, "frame.src written once");
+        assert.strictEqual(ctx.requests.length, 1, "token requested once");
+        assert(ctx.frame.src.endsWith("?SynoToken=REMOTETOK"));
+    });
+
+    await test("a second window (new iframe) is loaded again", async () => {
+        const first = load({ session: { SynoToken: "TOK" } });
+        await loadHelper(first);
+        assert.strictEqual(first.frame.srcWrites, 1);
+        const second = load({ session: { SynoToken: "TOK" } });   // fresh DOM, fresh frame
+        await loadHelper(second);
+        assert.strictEqual(second.frame.srcWrites, 1);
+    });
+
+    await test("the console tells where it stalls", async () => {
+        const ctx = load({ session: { SynoToken: "TOK" } });
+        await loadHelper(ctx);
+        const text = ctx.logs.join("\n");
+        for (const step of ["loadHelper called", "SynoToken found via", "helper frame src set"]) {
+            assert(text.includes(step), "missing log: " + step);
+        }
     });
 
     console.log(failed ? "\nFAILED: " + failed : "\nALL PASSED");

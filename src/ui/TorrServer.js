@@ -88,6 +88,45 @@ Ext.apply(SYNO.SDS.TorrServer.Utils, function() {
             (found ? "?SynoToken=" + encodeURIComponent(found.token) : "");
     }
 
+    function getFrame() {
+        var frame = null;
+
+        try {
+            frame = Ext.getDom(FRAME_ID);
+        } catch (e) {
+            frame = null;
+        }
+
+        if (!frame && typeof document !== "undefined" && document.getElementById) {
+            frame = document.getElementById(FRAME_ID);
+        }
+
+        return frame || null;
+    }
+
+    // The window may be rendered before or after the constructor returns, and
+    // DSM builds its windows at different moments, so do not depend on a
+    // lifecycle event: poll until the iframe exists (up to ~10 s).
+    function waitForFrame(callback, attempt) {
+        var frame = getFrame();
+
+        if (frame) {
+            callback(frame);
+            return;
+        }
+
+        attempt = attempt || 0;
+
+        if (attempt >= 100) {
+            log("helper frame was never created; giving up");
+            return;
+        }
+
+        setTimeout(function() {
+            waitForFrame(callback, attempt + 1);
+        }, 100);
+    }
+
     return {
         findTokenSync: findTokenSync,
         resolveToken: resolveToken,
@@ -102,17 +141,27 @@ Ext.apply(SYNO.SDS.TorrServer.Utils, function() {
                 'frameborder="0"></iframe>';
         },
 
+        // Safe to call any number of times (constructor, afterrender, onOpen):
+        // each frame is loaded once.
         loadHelper: function() {
-            resolveToken(function(found) {
-                var frame = Ext.getDom(FRAME_ID);
+            log("loadHelper called");
 
-                log(found ?
-                    "SynoToken found via " + found.source :
-                    "SynoToken not found; the helper will refuse access");
-
-                if (frame) {
-                    frame.src = helperSrc(found);
+            waitForFrame(function(frame) {
+                if (frame.getAttribute && frame.getAttribute("data-ts-started")) {
+                    return;
                 }
+                if (frame.setAttribute) {
+                    frame.setAttribute("data-ts-started", "1");
+                }
+
+                resolveToken(function(found) {
+                    log(found ?
+                        "SynoToken found via " + found.source :
+                        "SynoToken not found; the helper will refuse access");
+
+                    frame.src = helperSrc(found);
+                    log("helper frame src set");
+                });
             });
         }
     };
@@ -150,9 +199,13 @@ Ext.define("SYNO.SDS.TorrServer.MainWindow", {
 
         MY.Utils.ApplicationWindow = this;
 
+        // Three triggers, because DSM's window life cycle differs between
+        // versions; loadHelper() ignores repeated calls for the same frame.
         this.on("afterrender", function() {
             MY.Utils.loadHelper();
         }, this, {single: true});
+
+        MY.Utils.loadHelper();
     },
 
     onOpen: function() {
@@ -160,6 +213,8 @@ Ext.define("SYNO.SDS.TorrServer.MainWindow", {
             this,
             arguments
         );
+
+        SYNO.SDS.TorrServer.Utils.loadHelper();
     },
 
     onRequest: function(request) {
