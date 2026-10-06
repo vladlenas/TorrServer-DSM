@@ -22,7 +22,7 @@ jobs:
 
       - name: Syntax check (shell and Python)
         run: |
-          for f in src/scripts/*; do dash -n "$f"; done
+          for f in src/scripts/* .github/scripts/*.sh; do dash -n "$f"; done
           bash -n build-package.sh
           bash -n src/INFO.sh
           python3 -m py_compile src/helper/helper.py

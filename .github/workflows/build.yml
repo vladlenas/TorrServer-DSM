@@ -138,7 +138,19 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           VERSION: ${{ needs.check-version.outputs.version }}
         run: |
+          # Release notes come from CHANGELOG.md when its top entry is for this
+          # version; otherwise fall back to GitHub's generated notes.
+          sh .github/scripts/release-notes.sh "${VERSION}" CHANGELOG.md > notes.md || true
+
+          if [ -s notes.md ]; then
+            NOTES="--notes-file notes.md"
+            echo "Using CHANGELOG.md entry for ${VERSION}"
+          else
+            NOTES="--generate-notes"
+            echo "::warning::No CHANGELOG.md entry for ${VERSION}; using generated notes"
+          fi
+
           gh release create "v${VERSION}" \
             spk/*.spk \
             --title "TorrServer DSM v${VERSION}" \
-            --generate-notes
+            ${NOTES}

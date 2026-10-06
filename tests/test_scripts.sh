@@ -113,5 +113,48 @@ else
     done
 fi
 
+echo "== release notes extraction (CI release job)"
+NOTES="${ROOT}/.github/scripts/release-notes.sh"
+cat > "$TMP/CHANGELOG.md" <<'CL'
+# Changelog
+
+Intro text that is not part of any release.
+
+## 2.0.2 (2026-02-02)
+
+New things.
+
+### Fixed
+
+- a fix
+
+## 2.0.1 (2026-01-01)
+
+Old things.
+
+## 2.0.0 (2025-12-01)
+
+## 1.9.9 (2025-11-01)
+
+Empty heading above.
+CL
+top="$(sh "$NOTES" 2.0.2 "$TMP/CHANGELOG.md")"
+check "top entry is returned"                    sh -c "echo '$top' | grep -q 'New things'"
+check "its sub-sections are included"            sh -c "echo '$top' | grep -q '^- a fix'"
+check "older entries are not included"           sh -c "! echo '$top' | grep -q 'Old things'"
+check "the heading itself is not repeated"       sh -c "! echo '$top' | grep -q '^## 2.0.2'"
+check "text before the first entry is skipped"   sh -c "! echo '$top' | grep -q 'Intro text'"
+old="$(sh "$NOTES" 2.0.1 "$TMP/CHANGELOG.md")"
+check "an older entry can be selected"           sh -c "[ \"$old\" = 'Old things.' ]"
+sh "$NOTES" 2.0.2 "$TMP/CHANGELOG.md" > "$TMP/n.txt"
+check "no leading blank line"                    sh -c "[ \"\$(head -n1 '$TMP/n.txt')\" = 'New things.' ]"
+check "no trailing blank lines"                  sh -c "[ \"\$(tail -n1 '$TMP/n.txt')\" = '- a fix' ]"
+check "unknown version -> nothing, exit 1"       sh -c "! sh '$NOTES' 9.9.9 '$TMP/CHANGELOG.md' >/dev/null"
+check "a version prefix does not match"          sh -c "! sh '$NOTES' 2.0 '$TMP/CHANGELOG.md' >/dev/null"
+check "an empty entry -> exit 1 (falls back)"    sh -c "! sh '$NOTES' 2.0.0 '$TMP/CHANGELOG.md' >/dev/null"
+check "missing file -> exit 1"                   sh -c "! sh '$NOTES' 2.0.2 '$TMP/nope.md' >/dev/null"
+check "missing version argument -> exit 1"       sh -c "! sh '$NOTES' '' '$TMP/CHANGELOG.md' >/dev/null"
+check "the real CHANGELOG has an entry for itself" sh -c "v=\$(grep -m1 '^## ' '${ROOT}/CHANGELOG.md' | awk '{print \$2}'); sh '$NOTES' \"\$v\" '${ROOT}/CHANGELOG.md' >/dev/null"
+
 echo
 if [ "$FAILED" -eq 0 ]; then echo "ALL PASSED"; else echo "FAILED: $FAILED"; exit 1; fi
