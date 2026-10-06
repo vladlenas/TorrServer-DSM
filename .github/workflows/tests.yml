@@ -1,0 +1,47 @@
+name: Tests
+
+on:
+  pull_request:
+  push:
+    branches-ignore:
+      - main
+  # Called from build.yml so a release is never built from a failing tree.
+  workflow_call:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: Unit tests and script checks
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Syntax check (shell and Python)
+        run: |
+          for f in src/scripts/* .github/scripts/*.sh; do dash -n "$f"; done
+          bash -n build-package.sh
+          bash -n src/INFO.sh
+          python3 -m py_compile src/helper/helper.py
+
+      - name: Helper unit tests
+        run: python3 -m unittest discover -s tests -v
+
+      - name: Desktop app (JS) tests
+        run: |
+          node --check src/ui/TorrServer.js
+          node tests/test_ui.js
+
+      - name: Package script tests
+        run: sh tests/test_scripts.sh
+
+      - name: Build script tests
+        run: bash tests/test_build.sh
+
+      - name: ShellCheck (informational)
+        continue-on-error: true
+        run: |
+          shellcheck --severity=warning src/scripts/* build-package.sh src/INFO.sh

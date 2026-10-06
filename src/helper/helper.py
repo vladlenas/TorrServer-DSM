@@ -1,13 +1,17 @@
 #!/usr/bin/env python3
 
 import base64
+import grp
+import hashlib
 import html
 import json
 import os
 import platform
+import pwd
 import re
 import shutil
 import subprocess
+import sys
 import time
 import threading
 import ssl
@@ -28,7 +32,8 @@ MAX_POST_BYTES = 64 * 1024
 USERNAME_MAX_LENGTH = 64
 
 PACKAGE_NAME = "TorrServer"
-PACKAGE_VAR = "/var/packages/TorrServer/var"
+# TORRSERVER_DSM_VAR exists for the test suite; DSM never sets it.
+PACKAGE_VAR = os.environ.get("TORRSERVER_DSM_VAR") or "/var/packages/TorrServer/var"
 TORRSERVER_BIN = "/var/packages/TorrServer/target/bin/TorrServer"
 TORRSERVER_LOG = os.path.join(PACKAGE_VAR, "TorrServer.log")
 
@@ -49,6 +54,9 @@ AUTH_FILE = os.path.join(PACKAGE_VAR, "torrserver.auth")
 ACCS_FILE = os.path.join(PACKAGE_VAR, "accs.db")
 TORRSERVER_DIR_FILE = os.path.join(PACKAGE_VAR, "torrserver.dir")
 CACHE_PATH_FILE = os.path.join(PACKAGE_VAR, "cache.path")
+# Cache directory chosen while TorrServer was not running; applied by
+# pending_cache_loop() as soon as the API answers.
+CACHE_PENDING_FILE = os.path.join(PACKAGE_VAR, "cache.pending")
 FUSE_FILE = os.path.join(PACKAGE_VAR, "torrserver.fuse")
 HTTPS_FILE = os.path.join(PACKAGE_VAR, "torrserver.https")
 HTTPS_PORT_FILE = os.path.join(PACKAGE_VAR, "torrserver.https.port")
@@ -80,6 +88,174 @@ LANGUAGE_NAMES = {
 }
 
 
+# ---------------------------------------------------------------------------
+# Authentication
+#
+# nginx proxies /webman/3rdparty/TorrServer/helper/ to this server WITHOUT any
+# DSM login check, so the helper must verify the DSM session itself. It asks
+# DSM's own authenticate.cgi (the documented way for third-party CGIs) who the
+# caller is and only serves DSM administrators. Everything fails closed.
+# ---------------------------------------------------------------------------
+AUTH_CGI_PATHS = (
+    "/usr/syno/synoman/webman/modules/authenticate.cgi",
+    "/usr/syno/synoman/webman/authenticate.cgi",
+)
+ADMIN_GROUP = "administrators"
+AUTH_CACHE_SECONDS = 15
+AUTH_DENIED_CACHE_SECONDS = 2
+AUTH_CACHE_MAX = 256
+
+# The DSM desktop passes its CSRF token (SynoToken) in the iframe URL; it is
+# kept in a cookie scoped to the helper so later links and form posts carry it.
+TOKEN_COOKIE = "TorrServerSynoToken"
+TOKEN_COOKIE_PATH = "/webman/3rdparty/TorrServer/"
+TOKEN_PATTERN = re.compile(r"^[A-Za-z0-9_\-+/=.]{1,256}$")
+USER_PATTERN = re.compile(r"^[\w.@\\ -]{1,128}$")
+
+_AUTH_CACHE = {}
+_AUTH_CACHE_LOCK = threading.Lock()
+
+
+def auth_log(message):
+    try:
+        print("helper-auth: {}".format(message), file=sys.stderr, flush=True)
+    except Exception:
+        pass
+
+
+def parse_cgi_user(output):
+    """Extract the user name printed by authenticate.cgi."""
+    text = (output or "").replace("\r\n", "\n").strip()
+
+    if not text:
+        return ""
+
+    # Some builds print CGI headers first.
+    first = text.split("\n", 1)[0]
+    if ":" in first and "\n\n" in text:
+        text = text.split("\n\n", 1)[1].strip()
+
+    line = text.split("\n", 1)[0].strip()
+    return line if USER_PATTERN.match(line) else ""
+
+
+def run_authenticate_cgi(cookie, token, remote_addr, host):
+    """Return ``(user, reason)``; user is "" when the session is not valid."""
+    reason = "authenticate.cgi not found"
+
+    for path in AUTH_CGI_PATHS:
+        if not os.access(path, os.X_OK):
+            continue
+
+        env = {
+            "PATH": "/usr/syno/bin:/usr/syno/sbin:/usr/bin:/usr/sbin:/bin:/sbin",
+            "HTTP_COOKIE": cookie,
+            "REMOTE_ADDR": remote_addr,
+            "HTTP_HOST": host,
+            "REQUEST_METHOD": "GET",
+            "SERVER_PROTOCOL": "HTTP/1.1",
+        }
+        if token:
+            env["HTTP_X_SYNO_TOKEN"] = token
+
+        try:
+            result = subprocess.run(
+                [path],
+                env=env,
+                stdin=subprocess.DEVNULL,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                timeout=5,
+                universal_newlines=True,
+            )
+        except Exception as e:
+            reason = "{} failed: {}".format(os.path.basename(path), e)
+            continue
+
+        user = parse_cgi_user(result.stdout)
+        if user:
+            return user, ""
+
+        reason = "{} rc={} returned no user (stdout {} bytes, stderr {} bytes)".format(
+            path, result.returncode, len(result.stdout or ""), len(result.stderr or "")
+        )
+
+    return "", reason
+
+
+def is_dsm_admin(username):
+    """True when *username* belongs to the DSM administrators group.
+
+    DSM user names are case-insensitive: authenticate.cgi may print "Vlad"
+    while the account is stored as "vlad", so both spellings are tried.
+    """
+    try:
+        group = grp.getgrnam(ADMIN_GROUP)
+    except KeyError:
+        return False
+
+    wanted = username.lower()
+
+    if any(member.lower() == wanted for member in group.gr_mem):
+        return True
+
+    entry = None
+    system_name = username
+
+    for candidate in dict.fromkeys((username, wanted)):
+        try:
+            entry = pwd.getpwnam(candidate)
+            system_name = candidate
+            break
+        except KeyError:
+            continue
+
+    if entry is None:
+        return False
+
+    if entry.pw_gid == group.gr_gid:
+        return True
+
+    try:
+        return group.gr_gid in os.getgrouplist(system_name, entry.pw_gid)
+    except OSError:
+        return False
+
+
+def check_dsm_session(cookie, token, remote_addr, host=""):
+    """Return ``(admin_user, reason)``; admin_user is "" when access is denied."""
+    if not cookie:
+        return "", "no session cookie"
+
+    key = hashlib.sha256(
+        "\0".join((cookie, token, remote_addr)).encode("utf-8", "replace")
+    ).hexdigest()
+    now = time.monotonic()
+
+    with _AUTH_CACHE_LOCK:
+        cached = _AUTH_CACHE.get(key)
+        if cached and cached[0] > now:
+            return cached[1], cached[2]
+
+    user, reason = run_authenticate_cgi(cookie, token, remote_addr, host)
+
+    if user and not is_dsm_admin(user):
+        reason = "user '{}' is not a DSM administrator".format(user)
+        user = ""
+
+    lifetime = AUTH_CACHE_SECONDS if user else AUTH_DENIED_CACHE_SECONDS
+
+    with _AUTH_CACHE_LOCK:
+        if len(_AUTH_CACHE) >= AUTH_CACHE_MAX:
+            for stale in [k for k, v in _AUTH_CACHE.items() if v[0] <= now]:
+                _AUTH_CACHE.pop(stale, None)
+            if len(_AUTH_CACHE) >= AUTH_CACHE_MAX:
+                _AUTH_CACHE.clear()
+        _AUTH_CACHE[key] = (now + lifetime, user, reason)
+
+    return user, reason
+
+
 def get_language():
     value = read_file(LANGUAGE_FILE, "en").strip().lower()
     return value if value in SUPPORTED_LANGUAGES else "en"
@@ -104,21 +280,91 @@ def load_locale(language=None):
         return {}
 
 
+_HTML_TOKEN_RE = re.compile(
+    r"(<script\b[^>]*>)(.*?)(</script>)"      # 1-3: script open / body / close
+    r"|<style\b.*?</style>"                   # style: never translated
+    r"|<!--.*?-->"                             # comments: never translated
+    r"|<[^>]+>",                               # any other tag
+    re.S | re.I,
+)
+_TRANSLATABLE_ATTR_RE = re.compile(
+    r"""(\b(?:placeholder|title|alt|aria-label)\s*=\s*)("[^"]*"|'[^']*')""",
+    re.I,
+)
+
+
 def localize_html(content):
-    translations = load_locale()
+    """Translate English source strings in rendered HTML.
+
+    Locale files use the English text as key. Only text that is meant for the
+    reader is translated:
+
+    * text nodes,
+    * the placeholder / title / alt / aria-label attributes,
+    * string literals inside <script> (the key must start right after a quote).
+
+    Everything else (``value``, ``href``, ``id``, ``onclick``, identifiers in
+    scripts, CSS, ``data:`` URIs) is left untouched, so form values typed by
+    the user, paths and embedded images can never be altered by a translation.
+    """
+    translations = {
+        source: str(translated)
+        for source, translated in load_locale().items()
+        if source and source != str(translated)
+    }
     if not translations:
         return content
 
-    # Locale files use English source strings as keys. Replace only textual
-    # strings; URLs, paths and program identifiers are intentionally untouched.
-    for source, translated in sorted(
-        translations.items(),
-        key=lambda item: len(item[0]),
-        reverse=True
-    ):
-        if source and source != translated:
-            content = content.replace(source, str(translated))
-    return content
+    ordered = sorted(translations, key=len, reverse=True)
+
+    # Keys that contain markup (e.g. <b>..</b>) span several tokens, so they
+    # are applied to the whole document first. They are full sentences, so an
+    # accidental match elsewhere is not a practical concern.
+    for source in ordered:
+        if "<" in source:
+            content = content.replace(source, translations[source])
+
+    plain = [source for source in ordered if "<" not in source]
+    if not plain:
+        return content
+
+    text_re = re.compile("|".join(re.escape(source) for source in plain))
+    script_re = re.compile(
+        "(?<=['\"])(?:" + "|".join(re.escape(source) for source in plain) + ")"
+    )
+
+    def translate_text(text):
+        return text_re.sub(lambda m: translations[m.group(0)], text)
+
+    def translate_script(text):
+        return script_re.sub(lambda m: translations[m.group(0)], text)
+
+    def translate_tag(tag):
+        return _TRANSLATABLE_ATTR_RE.sub(
+            lambda m: m.group(1) + translate_text(m.group(2)), tag
+        )
+
+    parts = []
+    position = 0
+
+    for match in _HTML_TOKEN_RE.finditer(content):
+        parts.append(translate_text(content[position:match.start()]))
+
+        token = match.group(0)
+
+        if match.group(1) is not None:
+            parts.append(match.group(1))
+            parts.append(translate_script(match.group(2)))
+            parts.append(match.group(3))
+        elif token.startswith("<") and not re.match(r"<(?:style|!--)", token, re.I):
+            parts.append(translate_tag(token))
+        else:
+            parts.append(token)
+
+        position = match.end()
+
+    parts.append(translate_text(content[position:]))
+    return "".join(parts)
 
 
 def language_selector():
@@ -500,11 +746,34 @@ _PRIVILEGE_CACHE = {"time": 0.0, "value": False}
 PRIVILEGE_CACHE_SECONDS = 10
 
 
-def has_privileged_access(use_cache=True):
-    """Return True when the package can run its root-only certificate helper.
+# Must match the exit code prepare-directory uses for "no directory given".
+PREPARE_USAGE_EXIT = 64
 
-    Each check spawns sudo and a ``find`` over the certificate store, so the
-    result is cached briefly (a page render asks several times).
+
+def sudo_denied(stderr):
+    """True when sudo itself refused (not the script it was asked to run).
+
+    Whatever the locale, sudo prefixes its own messages with "sudo:".
+    """
+    return "sudo:" in (stderr or "")
+
+
+PERMISSIONS_OUTDATED = (
+    "DSM permissions are missing or out of date. Run "
+    "/var/packages/TorrServer/scripts/setup-permissions as root in DSM Task "
+    "Scheduler (the permissions were extended in this version), then try again"
+)
+
+
+def has_privileged_access(use_cache=True):
+    """Return True when the package may run its root-only scripts.
+
+    Both scripts the Helper depends on are checked, because a sudoers rule
+    written by an older package version covers only some of them. Each check
+    spawns sudo, so the result is cached briefly (a page render asks several
+    times). prepare-directory is started without arguments, which makes it
+    print its usage text and do nothing; restart-package is not probed because
+    running it would restart the package.
     """
     now = time.monotonic()
 
@@ -513,15 +782,31 @@ def has_privileged_access(use_cache=True):
 
     value = False
 
-    if os.path.isfile(CERTIFICATE_HELPER):
+    if os.path.isfile(CERTIFICATE_HELPER) and os.path.isfile(PREPARE_DIRECTORY):
         try:
-            result = subprocess.run(
+            certificates = subprocess.run(
                 ["/bin/sudo", "-n", CERTIFICATE_HELPER],
+                stdin=subprocess.DEVNULL,
                 stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
+                stderr=subprocess.PIPE,
+                universal_newlines=True,
                 timeout=5,
             )
-            value = result.returncode == 0
+            directories = subprocess.run(
+                ["/bin/sudo", "-n", PREPARE_DIRECTORY],
+                stdin=subprocess.DEVNULL,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.PIPE,
+                universal_newlines=True,
+                timeout=5,
+            )
+            # sudo's own refusal exits with 1; prepare-directory without an
+            # argument exits with PREPARE_USAGE_EXIT. Warnings that sudo may
+            # print on stderr therefore cannot be mistaken for a refusal.
+            value = (
+                certificates.returncode == 0
+                and directories.returncode == PREPARE_USAGE_EXIT
+            )
         except Exception:
             value = False
 
@@ -646,12 +931,72 @@ def get_torrserver_uptime():
         return "Unknown"
 
 
+NOT_WRITABLE = (
+    "The TorrServer service user cannot write to this folder. Give the TorrServer "
+    "user Read/Write permission on the shared folder (DSM Control Panel → Shared "
+    "Folder → Edit → Permissions → System internal user), or enable the optional "
+    "DSM permissions on the DSM permissions page."
+)
+
+SUBDIRECTORIES = ("Cache", "FUSE")
+
+
+def prepare_directory_directly(torrserver_dir):
+    """Create Cache and FUSE as the service user, without root.
+
+    Returns True when both exist and are writable, False when root is needed
+    (the service user may not write there). Raises ValueError for a problem
+    that root would not fix either.
+    """
+    for name in SUBDIRECTORIES:
+        path = os.path.join(torrserver_dir, name)
+
+        if os.path.islink(path):
+            raise ValueError(
+                "TorrServer subdirectory must not be a symbolic link: {}".format(path)
+            )
+
+        if os.path.exists(path):
+            if not os.path.isdir(path):
+                raise ValueError(
+                    "TorrServer subdirectory is not a directory: {}".format(path)
+                )
+
+            if not os.access(path, os.W_OK | os.X_OK):
+                return False
+
+            continue
+
+        try:
+            os.mkdir(path, 0o755)
+        except PermissionError:
+            return False
+        except FileExistsError:
+            continue
+        except OSError as e:
+            raise ValueError("Failed to create {}: {}".format(path, e))
+
+    return True
+
+
 def prepare_torrserver_directory(torrserver_dir):
+    if not torrserver_dir:
+        return False, "Choose the TorrServer directory with the Browse button"
+
+    # Normal case: the user gave the service user access to the share (the
+    # usual DSM way), so no root is needed at all.
+    try:
+        if prepare_directory_directly(torrserver_dir):
+            return True, ""
+    except ValueError as e:
+        return False, str(e)
+
+    # Otherwise ask the root helper, which needs the optional permissions.
+    if not has_privileged_access():
+        return False, NOT_WRITABLE
+
     if not os.path.isfile(PREPARE_DIRECTORY):
         return False, "Directory preparation script not found"
-
-    if not torrserver_dir:
-        return False, "TorrServer directory is required"
 
     try:
         result = subprocess.run(
@@ -664,11 +1009,14 @@ def prepare_torrserver_directory(torrserver_dir):
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             stdin=subprocess.DEVNULL,
-            text=True,
+            universal_newlines=True,
             timeout=15,
         )
 
         if result.returncode != 0:
+            if sudo_denied(result.stderr):
+                return False, PERMISSIONS_OUTDATED
+
             message = result.stderr.strip() or result.stdout.strip()
             return False, message or "Failed to prepare TorrServer directory"
 
@@ -764,11 +1112,19 @@ def _local_tls_context():
 
 
 def torrserver_api(payload, http_port=None):
+    """Return ``(True, data)`` or ``(False, error_message)``; see
+    :func:`torrserver_request`."""
+    ok, data, _reachable = torrserver_request(payload, http_port)
+    return ok, data
+
+
+def torrserver_request(payload, http_port=None):
     """POST *payload* to the running TorrServer ``/settings`` endpoint.
 
     Tries HTTP first (the running instance may still be HTTP although the
-    saved flags already say HTTPS), then HTTPS. Returns ``(True, data)`` or
-    ``(False, error_message)``.
+    saved flags already say HTTPS), then HTTPS. Returns
+    ``(ok, data_or_error, reachable)``; *reachable* is False only when no
+    endpoint could be contacted at all (TorrServer is not running).
     """
     http_port = get_port() if http_port is None else int(http_port)
     https_port = get_https_port()
@@ -783,6 +1139,7 @@ def torrserver_api(payload, http_port=None):
     body = json.dumps(payload).encode("utf-8")
     auth_header = get_api_auth_header()
     last_error = None
+    reachable = False
 
     for url, context in endpoints:
         request = urllib.request.Request(
@@ -803,20 +1160,24 @@ def torrserver_api(payload, http_port=None):
             with opener.open(request, timeout=5) as response:
                 raw = response.read().decode("utf-8", errors="replace")
 
+            reachable = True
+
             if not raw.strip():
-                return True, {}
+                return True, {}, True
 
             try:
-                return True, json.loads(raw)
+                return True, json.loads(raw), True
             except ValueError:
                 last_error = "unexpected response from TorrServer"
 
         except urllib.error.HTTPError as e:
+            # The server answered (e.g. 401, or a redirect to HTTPS).
+            reachable = True
             last_error = "HTTP Error {}: {}".format(e.code, e.reason)
         except Exception as e:
             last_error = str(e)
 
-    return False, last_error or "request failed"
+    return False, last_error or "request failed", reachable
 
 
 def _find_key(data, name):
@@ -851,29 +1212,60 @@ def get_cache_path():
 
 
 def set_cache_path(cache_path, port=None):
+    """Apply the cache directory to the running TorrServer.
+
+    Returns ``(status, message)`` where status is ``"applied"``, ``"pending"``
+    (TorrServer is not running; applied automatically once it is) or
+    ``"error"``.
+    """
     # TorrServer's "set" replaces the whole settings object, so read the
     # current settings, change one field and send everything back. Sending a
     # partial object would reset every other TorrServer setting.
-    ok, data = torrserver_api({"action": "get"}, port)
+    ok, data, reachable = torrserver_request({"action": "get"}, port)
+
     if not ok:
-        return False, (
-            "Unable to read TorrServer settings (is TorrServer running?): {}"
-            .format(data)
-        )
+        if not reachable:
+            write_file(CACHE_PENDING_FILE, cache_path)
+            return "pending", "TorrServer is not running"
+
+        return "error", "Unable to read TorrServer settings: {}".format(data)
 
     if not isinstance(data, dict) or not data:
-        return False, "Unable to read TorrServer settings: empty response"
+        return "error", "Unable to read TorrServer settings: empty response"
 
     key = _find_key(data, "TorrentsSavePath") or "TorrentsSavePath"
 
     if data.get(key) != cache_path:
         data[key] = cache_path
-        ok, result = torrserver_api({"action": "set", "sets": data}, port)
+        ok, result, _reachable = torrserver_request(
+            {"action": "set", "sets": data}, port
+        )
         if not ok:
-            return False, "Unable to apply cache directory: {}".format(result)
+            return "error", "Unable to apply cache directory: {}".format(result)
 
     write_file(CACHE_PATH_FILE, cache_path)
-    return True, ""
+    remove_file(CACHE_PENDING_FILE)
+    return "applied", ""
+
+
+def remove_file(path):
+    try:
+        os.unlink(path)
+    except OSError:
+        pass
+
+
+def apply_pending_cache_path():
+    """Apply a cache directory saved while TorrServer was down.
+
+    Returns True when nothing is left to do.
+    """
+    cache_path = read_file(CACHE_PENDING_FILE, "")
+    if not cache_path:
+        return True
+
+    status, _message = set_cache_path(cache_path)
+    return status == "applied"
 
 
 PASSWORD_PLACEHOLDER = "••••••••"
@@ -987,14 +1379,16 @@ def save_settings(params):
 
     # ---- 1. Validate everything first; nothing is changed until all pass.
 
-    if not has_privileged_access():
-        return False, "Additional DSM permissions are required to save settings"
-
     if ssl_mode not in (SSL_CERT_MODE_SELF, SSL_CERT_MODE_DSM, SSL_CERT_MODE_MANUAL):
         return False, "Invalid certificate mode"
 
+    # Everything else works without root. Only certificates that have to be
+    # copied from DSM (or from a root-readable path) need the optional rule.
+    if ssl_mode != SSL_CERT_MODE_SELF and not has_privileged_access():
+        return False, "Additional DSM permissions are required for DSM and manual certificates."
+
     if not torrserver_dir:
-        return False, "TorrServer directory is required"
+        return False, "Choose the TorrServer directory with the Browse button"
 
     if len(torrserver_dir) > 1:
         torrserver_dir = torrserver_dir.rstrip("/")
@@ -1061,9 +1455,10 @@ def save_settings(params):
     if not ok:
         return False, directory_message
 
-    # TorrServer is still listening on old_port at this point.
-    ok, cache_message = set_cache_path(get_cache_dir(torrserver_dir), old_port)
-    if not ok:
+    # TorrServer is still listening on old_port at this point. If it is not
+    # running at all the change is queued and applied when it starts.
+    status, cache_message = set_cache_path(get_cache_dir(torrserver_dir), old_port)
+    if status == "error":
         return False, cache_message
 
     try:
@@ -1082,6 +1477,9 @@ def save_settings(params):
         write_file(SSL_KEY_FILE, ssl_key)
     except OSError as e:
         return False, "Unable to write settings: {}".format(e)
+
+    if status == "pending":
+        return True, "Settings saved. The cache directory is applied when TorrServer starts"
 
     return True, "Settings saved"
 
@@ -2700,13 +3098,13 @@ toggleSslMode();
 toggleAuth();
 </script>
 """.format(
-        "disabled" if not privileged else "",
+        "",
         port,
         html.escape(torrserver_dir, quote=True),
         "checked" if fuse else "",
-        "disabled" if not privileged else "",
+        "",
         "checked" if https else "",
-        "disabled" if not privileged else "",
+        "",
         https_port,
         "checked" if force_https else "",
         "" if https else "disabled",
@@ -2733,7 +3131,6 @@ toggleAuth();
         html.escape(PASSWORD_PLACEHOLDER if saved_password else "", quote=True),
         "" if auth else "disabled",
         "" if privileged else "disabled",
-        "disabled" if not privileged else "",
     )
 
     body += page_footer()
@@ -2923,12 +3320,20 @@ window.addEventListener("load", openLog);
 
 class Handler(BaseHTTPRequestHandler):
 
+    def send_security_headers(self):
+        # Pages hold settings: never cache them, and only DSM itself (same
+        # origin) may frame them.
+        self.send_header("Cache-Control", "no-store")
+        self.send_header("X-Content-Type-Options", "nosniff")
+        self.send_header("Content-Security-Policy", "frame-ancestors 'self'")
+
     def send_html(self, content, status=200):
         data = content.encode("utf-8")
 
         self.send_response(status)
         self.send_header("Content-Type", "text/html; charset=utf-8")
         self.send_header("Content-Length", str(len(data)))
+        self.send_security_headers()
         self.end_headers()
 
         self.wfile.write(data)
@@ -2939,15 +3344,82 @@ class Handler(BaseHTTPRequestHandler):
         self.send_response(status)
         self.send_header("Content-Type", "text/plain; charset=utf-8")
         self.send_header("Content-Length", str(len(data)))
+        self.send_security_headers()
         self.end_headers()
 
         self.wfile.write(data)
 
-    def redirect(self, location):
+    def redirect(self, location, extra_headers=()):
         self.send_response(302)
         self.send_header("Location", location)
         self.send_header("Content-Length", "0")
+        for name, value in extra_headers:
+            self.send_header(name, value)
+        self.send_security_headers()
         self.end_headers()
+
+    def client_ip(self):
+        # nginx overwrites X-Real-IP with the real peer address.
+        value = (self.headers.get("X-Real-IP", "") or "").strip()
+        return value if re.match(r"^[0-9A-Fa-f:.]{3,45}$", value) else self.client_address[0]
+
+    def cookie_value(self, name):
+        for part in (self.headers.get("Cookie", "") or "").split(";"):
+            key, _, value = part.strip().partition("=")
+            if key == name:
+                return value
+        return ""
+
+    def send_denied(self):
+        self.send_html(
+            "<!DOCTYPE html><html><head><meta charset=\"utf-8\"><title>Access denied</title></head>"
+            "<body style=\"font-family:Arial,sans-serif;margin:40px\">"
+            "<h2>Access denied</h2>"
+            "<p>Sign in to DSM as an administrator and open "
+            "<b>TorrServer DSM</b> from the DSM main menu.</p></body></html>",
+            403,
+        )
+
+    def authorize(self):
+        """Only DSM administrators may use the helper. Returns True if allowed;
+        otherwise the response has already been sent."""
+        parsed = urlparse(self.path)
+        query_token = parse_qs(parsed.query).get("SynoToken", [""])[0].strip()
+        cookie_token = self.cookie_value(TOKEN_COOKIE)
+        header_token = (self.headers.get("X-SYNO-TOKEN", "") or "").strip()
+
+        token = header_token or query_token or cookie_token
+        if token and not TOKEN_PATTERN.match(token):
+            token = ""
+
+        user, reason = check_dsm_session(
+            self.headers.get("Cookie", "") or "",
+            token,
+            self.client_ip(),
+            self.request_host(),
+        )
+
+        if not user:
+            auth_log("denied {} {} from {}: {}".format(
+                self.command, parsed.path, self.client_ip(), reason))
+            self.send_denied()
+            return False
+
+        # The DSM desktop hands the token over in the URL once; keep it in a
+        # cookie and redirect to the clean URL so it does not stay in the
+        # address bar or in later links.
+        if query_token and query_token == token and query_token != cookie_token \
+                and self.command == "GET":
+            flags = "; Path={}; HttpOnly; SameSite=Strict".format(TOKEN_COOKIE_PATH)
+            if (self.headers.get("X-Forwarded-Proto", "") or "").lower() == "https":
+                flags += "; Secure"
+            self.redirect(
+                "./" + parsed.path.lstrip("/"),
+                extra_headers=(("Set-Cookie", "{}={}{}".format(TOKEN_COOKIE, query_token, flags)),),
+            )
+            return False
+
+        return True
 
     def request_host(self):
         """Host name from the Host header, restricted to hostname characters
@@ -3006,6 +3478,9 @@ class Handler(BaseHTTPRequestHandler):
         return parse_qs(body)
 
     def do_GET(self):
+        if not self.authorize():
+            return
+
         parsed = urlparse(self.path)
         path = parsed.path
 
@@ -3097,6 +3572,9 @@ class Handler(BaseHTTPRequestHandler):
         self.send_html("Not Found", 404)
 
     def do_POST(self):
+        if not self.authorize():
+            return
+
         parsed = urlparse(self.path)
         path = parsed.path
 
@@ -3170,6 +3648,21 @@ class Handler(BaseHTTPRequestHandler):
         return
 
 
+PENDING_POLL_SECONDS = 5
+
+
+def pending_cache_loop():
+    while True:
+        try:
+            if not apply_pending_cache_path():
+                time.sleep(PENDING_POLL_SECONDS)
+                continue
+        except Exception:
+            pass
+
+        time.sleep(PENDING_POLL_SECONDS * 2)
+
+
 def log_rotation_loop():
     while True:
         rotate_log_if_needed()
@@ -3188,6 +3681,12 @@ def run():
         daemon=True,
     )
     rotation_thread.start()
+
+    pending_thread = threading.Thread(
+        target=pending_cache_loop,
+        daemon=True,
+    )
+    pending_thread.start()
 
     try:
         server.serve_forever()
