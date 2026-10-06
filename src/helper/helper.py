@@ -1,13 +1,17 @@
 #!/usr/bin/env python3
 
 import base64
+import grp
+import hashlib
 import html
 import json
 import os
 import platform
+import pwd
 import re
 import shutil
 import subprocess
+import sys
 import time
 import threading
 import ssl
@@ -82,6 +86,159 @@ LANGUAGE_NAMES = {
     "pl": "Polski",
     "uk": "Українська",
 }
+
+
+# ---------------------------------------------------------------------------
+# Authentication
+#
+# nginx proxies /webman/3rdparty/TorrServer/helper/ to this server WITHOUT any
+# DSM login check, so the helper must verify the DSM session itself. It asks
+# DSM's own authenticate.cgi (the documented way for third-party CGIs) who the
+# caller is and only serves DSM administrators. Everything fails closed.
+# ---------------------------------------------------------------------------
+AUTH_CGI_PATHS = (
+    "/usr/syno/synoman/webman/modules/authenticate.cgi",
+    "/usr/syno/synoman/webman/authenticate.cgi",
+)
+ADMIN_GROUP = "administrators"
+AUTH_CACHE_SECONDS = 15
+AUTH_DENIED_CACHE_SECONDS = 2
+AUTH_CACHE_MAX = 256
+
+# The DSM desktop passes its CSRF token (SynoToken) in the iframe URL; it is
+# kept in a cookie scoped to the helper so later links and form posts carry it.
+TOKEN_COOKIE = "TorrServerSynoToken"
+TOKEN_COOKIE_PATH = "/webman/3rdparty/TorrServer/"
+TOKEN_PATTERN = re.compile(r"^[A-Za-z0-9_\-+/=.]{1,256}$")
+USER_PATTERN = re.compile(r"^[\w.@\\ -]{1,128}$")
+
+_AUTH_CACHE = {}
+_AUTH_CACHE_LOCK = threading.Lock()
+
+
+def auth_log(message):
+    try:
+        print("helper-auth: {}".format(message), file=sys.stderr, flush=True)
+    except Exception:
+        pass
+
+
+def parse_cgi_user(output):
+    """Extract the user name printed by authenticate.cgi."""
+    text = (output or "").replace("\r\n", "\n").strip()
+
+    if not text:
+        return ""
+
+    # Some builds print CGI headers first.
+    first = text.split("\n", 1)[0]
+    if ":" in first and "\n\n" in text:
+        text = text.split("\n\n", 1)[1].strip()
+
+    line = text.split("\n", 1)[0].strip()
+    return line if USER_PATTERN.match(line) else ""
+
+
+def run_authenticate_cgi(cookie, token, remote_addr, host):
+    """Return ``(user, reason)``; user is "" when the session is not valid."""
+    reason = "authenticate.cgi not found"
+
+    for path in AUTH_CGI_PATHS:
+        if not os.access(path, os.X_OK):
+            continue
+
+        env = {
+            "PATH": "/usr/syno/bin:/usr/syno/sbin:/usr/bin:/usr/sbin:/bin:/sbin",
+            "HTTP_COOKIE": cookie,
+            "REMOTE_ADDR": remote_addr,
+            "HTTP_HOST": host,
+            "REQUEST_METHOD": "GET",
+            "SERVER_PROTOCOL": "HTTP/1.1",
+        }
+        if token:
+            env["HTTP_X_SYNO_TOKEN"] = token
+
+        try:
+            result = subprocess.run(
+                [path],
+                env=env,
+                stdin=subprocess.DEVNULL,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                timeout=5,
+                universal_newlines=True,
+            )
+        except Exception as e:
+            reason = "{} failed: {}".format(os.path.basename(path), e)
+            continue
+
+        user = parse_cgi_user(result.stdout)
+        if user:
+            return user, ""
+
+        reason = "{} rc={} returned no user (stdout {} bytes, stderr {} bytes)".format(
+            path, result.returncode, len(result.stdout or ""), len(result.stderr or "")
+        )
+
+    return "", reason
+
+
+def is_dsm_admin(username):
+    """True when *username* belongs to the DSM administrators group."""
+    try:
+        group = grp.getgrnam(ADMIN_GROUP)
+    except KeyError:
+        return False
+
+    if username in group.gr_mem:
+        return True
+
+    try:
+        entry = pwd.getpwnam(username)
+    except KeyError:
+        return False
+
+    if entry.pw_gid == group.gr_gid:
+        return True
+
+    try:
+        return group.gr_gid in os.getgrouplist(username, entry.pw_gid)
+    except OSError:
+        return False
+
+
+def check_dsm_session(cookie, token, remote_addr, host=""):
+    """Return ``(admin_user, reason)``; admin_user is "" when access is denied."""
+    if not cookie:
+        return "", "no session cookie"
+
+    key = hashlib.sha256(
+        "\0".join((cookie, token, remote_addr)).encode("utf-8", "replace")
+    ).hexdigest()
+    now = time.monotonic()
+
+    with _AUTH_CACHE_LOCK:
+        cached = _AUTH_CACHE.get(key)
+        if cached and cached[0] > now:
+            return cached[1], cached[2]
+
+    user, reason = run_authenticate_cgi(cookie, token, remote_addr, host)
+
+    if user and not is_dsm_admin(user):
+        reason = "user '{}' is not a DSM administrator".format(user)
+        user = ""
+
+    lifetime = AUTH_CACHE_SECONDS if user else AUTH_DENIED_CACHE_SECONDS
+
+    with _AUTH_CACHE_LOCK:
+        if len(_AUTH_CACHE) >= AUTH_CACHE_MAX:
+            for stale in [k for k, v in _AUTH_CACHE.items() if v[0] <= now]:
+                _AUTH_CACHE.pop(stale, None)
+            if len(_AUTH_CACHE) >= AUTH_CACHE_MAX:
+                _AUTH_CACHE.clear()
+        _AUTH_CACHE[key] = (now + lifetime, user, reason)
+
+    return user, reason
 
 
 def get_language():
@@ -3045,12 +3202,20 @@ window.addEventListener("load", openLog);
 
 class Handler(BaseHTTPRequestHandler):
 
+    def send_security_headers(self):
+        # Pages hold settings: never cache them, and only DSM itself (same
+        # origin) may frame them.
+        self.send_header("Cache-Control", "no-store")
+        self.send_header("X-Content-Type-Options", "nosniff")
+        self.send_header("Content-Security-Policy", "frame-ancestors 'self'")
+
     def send_html(self, content, status=200):
         data = content.encode("utf-8")
 
         self.send_response(status)
         self.send_header("Content-Type", "text/html; charset=utf-8")
         self.send_header("Content-Length", str(len(data)))
+        self.send_security_headers()
         self.end_headers()
 
         self.wfile.write(data)
@@ -3061,15 +3226,82 @@ class Handler(BaseHTTPRequestHandler):
         self.send_response(status)
         self.send_header("Content-Type", "text/plain; charset=utf-8")
         self.send_header("Content-Length", str(len(data)))
+        self.send_security_headers()
         self.end_headers()
 
         self.wfile.write(data)
 
-    def redirect(self, location):
+    def redirect(self, location, extra_headers=()):
         self.send_response(302)
         self.send_header("Location", location)
         self.send_header("Content-Length", "0")
+        for name, value in extra_headers:
+            self.send_header(name, value)
+        self.send_security_headers()
         self.end_headers()
+
+    def client_ip(self):
+        # nginx overwrites X-Real-IP with the real peer address.
+        value = (self.headers.get("X-Real-IP", "") or "").strip()
+        return value if re.match(r"^[0-9A-Fa-f:.]{3,45}$", value) else self.client_address[0]
+
+    def cookie_value(self, name):
+        for part in (self.headers.get("Cookie", "") or "").split(";"):
+            key, _, value = part.strip().partition("=")
+            if key == name:
+                return value
+        return ""
+
+    def send_denied(self):
+        self.send_html(
+            "<!DOCTYPE html><html><head><meta charset=\"utf-8\"><title>Access denied</title></head>"
+            "<body style=\"font-family:Arial,sans-serif;margin:40px\">"
+            "<h2>Access denied</h2>"
+            "<p>Sign in to DSM as an administrator and open "
+            "<b>TorrServer DSM</b> from the DSM main menu.</p></body></html>",
+            403,
+        )
+
+    def authorize(self):
+        """Only DSM administrators may use the helper. Returns True if allowed;
+        otherwise the response has already been sent."""
+        parsed = urlparse(self.path)
+        query_token = parse_qs(parsed.query).get("SynoToken", [""])[0].strip()
+        cookie_token = self.cookie_value(TOKEN_COOKIE)
+        header_token = (self.headers.get("X-SYNO-TOKEN", "") or "").strip()
+
+        token = header_token or query_token or cookie_token
+        if token and not TOKEN_PATTERN.match(token):
+            token = ""
+
+        user, reason = check_dsm_session(
+            self.headers.get("Cookie", "") or "",
+            token,
+            self.client_ip(),
+            self.request_host(),
+        )
+
+        if not user:
+            auth_log("denied {} {} from {}: {}".format(
+                self.command, parsed.path, self.client_ip(), reason))
+            self.send_denied()
+            return False
+
+        # The DSM desktop hands the token over in the URL once; keep it in a
+        # cookie and redirect to the clean URL so it does not stay in the
+        # address bar or in later links.
+        if query_token and query_token == token and query_token != cookie_token \
+                and self.command == "GET":
+            flags = "; Path={}; HttpOnly; SameSite=Strict".format(TOKEN_COOKIE_PATH)
+            if (self.headers.get("X-Forwarded-Proto", "") or "").lower() == "https":
+                flags += "; Secure"
+            self.redirect(
+                "./" + parsed.path.lstrip("/"),
+                extra_headers=(("Set-Cookie", "{}={}{}".format(TOKEN_COOKIE, query_token, flags)),),
+            )
+            return False
+
+        return True
 
     def request_host(self):
         """Host name from the Host header, restricted to hostname characters
@@ -3128,6 +3360,9 @@ class Handler(BaseHTTPRequestHandler):
         return parse_qs(body)
 
     def do_GET(self):
+        if not self.authorize():
+            return
+
         parsed = urlparse(self.path)
         path = parsed.path
 
@@ -3219,6 +3454,9 @@ class Handler(BaseHTTPRequestHandler):
         self.send_html("Not Found", 404)
 
     def do_POST(self):
+        if not self.authorize():
+            return
+
         parsed = urlparse(self.path)
         path = parsed.path
 

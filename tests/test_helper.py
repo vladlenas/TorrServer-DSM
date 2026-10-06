@@ -9,6 +9,7 @@ import shutil
 import socket
 import tempfile
 import threading
+import time
 import unittest
 import urllib.error
 import urllib.request
@@ -299,12 +300,16 @@ class LocalizeTests(Base):
 class HttpTests(Base):
     @classmethod
     def setUpClass(cls):
+        # These tests are about request handling, so act as a logged-in admin.
+        cls._orig_check = h.check_dsm_session
+        h.check_dsm_session = lambda cookie, token, ip, host="": ("admin", "")
         cls.server = ThreadingHTTPServer(("127.0.0.1", 0), h.Handler)
         cls.port = cls.server.server_address[1]
         threading.Thread(target=cls.server.serve_forever, daemon=True).start()
 
     @classmethod
     def tearDownClass(cls):
+        h.check_dsm_session = cls._orig_check
         cls.server.shutdown()
         cls.server.server_close()
 
@@ -354,6 +359,206 @@ class HttpTests(Base):
 
     def test_log_name_whitelist(self):
         self.assertEqual(self.request("/read-log?name=../../etc/passwd")[0], 400)
+
+
+class AuthTests(Base):
+    """DSM session check. A stub authenticate.cgi stands in for DSM's."""
+
+    CGI_TEMPLATE = """#!/bin/sh
+# Records what the helper passes in, then behaves like DSM's authenticate.cgi:
+# prints the user only for the session cookie "id=GOOD" (plus token "TOK" when
+# a token is required).
+echo "cookie=$HTTP_COOKIE token=$HTTP_X_SYNO_TOKEN addr=$REMOTE_ADDR" >> "{log}"
+case "$HTTP_COOKIE" in
+  *id=GOOD*)
+    if [ -n "{need_token}" ] && [ "$HTTP_X_SYNO_TOKEN" != "{need_token}" ]; then exit 0; fi
+    echo "{user}" ;;
+  *id=HEADERS*) printf 'Content-Type: text/plain\\n\\n{user}\\n' ;;
+esac
+"""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.server = ThreadingHTTPServer(("127.0.0.1", 0), h.Handler)
+        cls.port = cls.server.server_address[1]
+        threading.Thread(target=cls.server.serve_forever, daemon=True).start()
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.server.shutdown()
+        cls.server.server_close()
+
+    def setUp(self):
+        super().setUp()
+        h._AUTH_CACHE.clear()
+        self.tmp = tempfile.mkdtemp(prefix="cgi-")
+        self.addCleanup(shutil.rmtree, self.tmp, True)
+        self.log = os.path.join(self.tmp, "calls.log")
+        self.saved = (h.AUTH_CGI_PATHS, h.is_dsm_admin, h.main_page)
+        self.addCleanup(lambda: (setattr(h, "AUTH_CGI_PATHS", self.saved[0]),
+                                 setattr(h, "is_dsm_admin", self.saved[1]),
+                                 setattr(h, "main_page", self.saved[2])))
+        h.main_page = lambda host: "SECRET-SETTINGS-PAGE"
+        h.is_dsm_admin = lambda user: user == "admin"
+        self.install_cgi(user="admin")
+
+    def install_cgi(self, user="admin", need_token=""):
+        path = os.path.join(self.tmp, "authenticate.cgi")
+        with open(path, "w") as f:
+            f.write(self.CGI_TEMPLATE.format(log=self.log, user=user, need_token=need_token))
+        os.chmod(path, 0o755)
+        h.AUTH_CGI_PATHS = (os.path.join(self.tmp, "missing.cgi"), path)
+        h._AUTH_CACHE.clear()
+
+    def get(self, path="/", headers=None, method="GET", data=None):
+        req = urllib.request.Request("http://127.0.0.1:%d%s" % (self.port, path),
+                                     headers=dict({"Host": "nas.local"}, **(headers or {})),
+                                     method=method, data=data)
+        try:
+            with urllib.request.build_opener(h._NoRedirect()).open(req, timeout=5) as r:
+                return r.status, r.read().decode(), r.headers
+        except urllib.error.HTTPError as e:
+            return e.code, e.read().decode(), e.headers
+
+    def calls(self):
+        return open(self.log).read() if os.path.exists(self.log) else ""
+
+    # ---- the bug that was reported: no login at all
+    def test_no_cookie_gets_nothing(self):
+        status, body, _ = self.get()
+        self.assertEqual(status, 403)
+        self.assertNotIn("SECRET-SETTINGS-PAGE", body)
+        self.assertEqual(self.calls(), "")  # not even worth running the CGI
+
+    def test_every_route_and_method_is_protected(self):
+        for path in ("/", "/settings", "/logs", "/browse?path=/", "/read-log?name=TorrServer.log",
+                     "/download-log?name=TorrServer.log", "/permissions", "/recommendations"):
+            self.assertEqual(self.get(path)[0], 403, path)
+        for path in ("/settings", "/restart", "/language"):
+            status, _, _ = self.get(path, method="POST", data=b"x=1",
+                                    headers={"Origin": "http://nas.local"})
+            self.assertEqual(status, 403, path)
+
+    def test_forged_cookie_is_rejected(self):
+        self.assertEqual(self.get(headers={"Cookie": "id=FORGED"})[0], 403)
+
+    def test_valid_admin_session_is_served(self):
+        status, body, headers = self.get(headers={"Cookie": "id=GOOD"})
+        self.assertEqual((status, body), (200, "SECRET-SETTINGS-PAGE"))
+        self.assertEqual(headers["Cache-Control"], "no-store")
+        self.assertIn("frame-ancestors 'self'", headers["Content-Security-Policy"])
+
+    def test_non_admin_user_is_rejected(self):
+        self.install_cgi(user="alice")
+        self.assertEqual(self.get(headers={"Cookie": "id=GOOD"})[0], 403)
+
+    def test_denial_page_leaks_nothing(self):
+        _, body, _ = self.get()
+        self.assertNotIn("authenticate", body.lower())
+        self.assertNotIn("/usr/syno", body)
+
+    # ---- fail closed
+    def test_missing_cgi_fails_closed(self):
+        h.AUTH_CGI_PATHS = (os.path.join(self.tmp, "nope.cgi"),)
+        self.assertEqual(self.get(headers={"Cookie": "id=GOOD"})[0], 403)
+
+    def test_crashing_cgi_fails_closed(self):
+        path = os.path.join(self.tmp, "boom.cgi")
+        with open(path, "w") as f:
+            f.write("#!/bin/sh\nexit 3\n")
+        os.chmod(path, 0o755)
+        h.AUTH_CGI_PATHS = (path,)
+        self.assertEqual(self.get(headers={"Cookie": "id=GOOD"})[0], 403)
+
+    def test_hostile_cgi_output_is_not_trusted(self):
+        self.assertEqual(h.parse_cgi_user("admin\n"), "admin")
+        self.assertEqual(h.parse_cgi_user("admin\nroot"), "admin")      # first line only
+        self.assertEqual(h.parse_cgi_user("DOMAIN\\\\bob"), "DOMAIN\\\\bob")
+        for evil in ("", "   ", "../../etc", "<script>alert(1)</script>", "a:b", "x" * 200):
+            self.assertEqual(h.parse_cgi_user(evil), "", repr(evil))
+
+    # ---- what DSM's CGI actually receives
+    def test_cookie_token_and_client_ip_reach_the_cgi(self):
+        self.install_cgi(need_token="TOK")
+        status, _, _ = self.get(headers={"Cookie": "id=GOOD", "X-SYNO-TOKEN": "TOK", "X-Real-IP": "192.168.1.50"})
+        self.assertEqual(status, 200)
+        self.assertIn("cookie=id=GOOD token=TOK addr=192.168.1.50", self.calls())
+
+    def test_token_required_by_dsm_is_enforced(self):
+        self.install_cgi(need_token="TOK")
+        self.assertEqual(self.get(headers={"Cookie": "id=GOOD"})[0], 403)
+        self.assertEqual(self.get(headers={"Cookie": "id=GOOD", "X-SYNO-TOKEN": "WRONG"})[0], 403)
+
+    def test_cgi_that_prints_headers_first_is_understood(self):
+        self.assertEqual(self.get(headers={"Cookie": "id=HEADERS"})[0], 200)
+
+    def test_spoofed_ip_header_is_sanitised(self):
+        self.get(headers={"Cookie": "id=GOOD", "X-Real-IP": "1.2.3.4; rm -rf /"})
+        self.assertNotIn("rm -rf", self.calls())
+
+    # ---- SynoToken hand-over from the DSM desktop iframe URL
+    def test_token_in_url_becomes_cookie_and_clean_redirect(self):
+        self.install_cgi(need_token="TOK")
+        status, _, headers = self.get("/settings?SynoToken=TOK", headers={
+            "Cookie": "id=GOOD", "X-Forwarded-Proto": "https"})
+        self.assertEqual(status, 302)
+        self.assertEqual(headers["Location"], "./settings")
+        cookie = headers["Set-Cookie"]
+        self.assertIn("TorrServerSynoToken=TOK", cookie)
+        for flag in ("HttpOnly", "SameSite=Strict", "Secure", "Path=/webman/3rdparty/TorrServer/"):
+            self.assertIn(flag, cookie)
+
+    def test_wrong_token_in_url_is_denied_without_cookie(self):
+        self.install_cgi(need_token="TOK")
+        status, _, headers = self.get("/?SynoToken=WRONG", headers={"Cookie": "id=GOOD"})
+        self.assertEqual(status, 403)
+        self.assertIsNone(headers.get("Set-Cookie"))
+
+    def test_token_cookie_authenticates_followup_requests(self):
+        self.install_cgi(need_token="TOK")
+        status, body, _ = self.get("/settings", headers={"Cookie": "id=GOOD; TorrServerSynoToken=TOK"})
+        self.assertEqual(status, 200)
+
+    def test_malformed_token_is_ignored(self):
+        self.install_cgi(need_token="")
+        self.get(headers={"Cookie": "id=GOOD", "X-SYNO-TOKEN": "a b;c"})
+        self.assertIn("token= ", self.calls())
+
+    # ---- caching
+    def test_valid_sessions_are_cached_briefly(self):
+        for _ in range(3):
+            self.assertEqual(self.get(headers={"Cookie": "id=GOOD"})[0], 200)
+        self.assertEqual(self.calls().count("\n"), 1)
+
+    def test_denials_are_remembered_only_for_a_moment(self):
+        # A user who has just logged in must not stay locked out.
+        self.assertEqual(self.get(headers={"Cookie": "id=NEW"})[0], 403)
+        now = time.monotonic()
+        (expires, user, _reason), = h._AUTH_CACHE.values()
+        self.assertEqual(user, "")
+        self.assertLessEqual(expires - now, h.AUTH_DENIED_CACHE_SECONDS + 0.5)
+        self.assertLess(h.AUTH_DENIED_CACHE_SECONDS, h.AUTH_CACHE_SECONDS)
+
+    # ---- admin group membership
+    def test_admin_group_membership(self):
+        h.is_dsm_admin = self.saved[1]
+        import grp, pwd
+        real_grp, real_pwd, real_list = grp.getgrnam, pwd.getpwnam, os.getgrouplist
+        group = type("G", (), {"gr_mem": ["root_like"], "gr_gid": 101})()
+        entry = lambda gid: type("P", (), {"pw_gid": gid})()
+        try:
+            grp.getgrnam = lambda name: group
+            pwd.getpwnam = lambda name: entry(100)
+            os.getgrouplist = lambda name, gid: [100, 101] if name == "nested" else [100]
+            self.assertTrue(h.is_dsm_admin("root_like"))        # listed member
+            self.assertTrue(h.is_dsm_admin("nested"))           # member through NSS
+            self.assertFalse(h.is_dsm_admin("alice"))
+            pwd.getpwnam = lambda name: entry(101)
+            self.assertTrue(h.is_dsm_admin("primary"))          # primary group
+            grp.getgrnam = lambda name: (_ for _ in ()).throw(KeyError(name))
+            self.assertFalse(h.is_dsm_admin("anyone"))          # no such group: fail closed
+        finally:
+            grp.getgrnam, pwd.getpwnam, os.getgrouplist = real_grp, real_pwd, real_list
 
 
 if __name__ == "__main__":

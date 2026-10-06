@@ -93,8 +93,12 @@ as root). Remove it with:
 ### Security notes
 
 - The Helper listens on `127.0.0.1:42777` only and is reached through DSM nginx
-  (`/webman/3rdparty/TorrServer/helper/`). It has no authentication of its own,
-  so never expose that port.
+  (`/webman/3rdparty/TorrServer/helper/`). **nginx does not check the DSM login
+  for that path**, so the Helper verifies the session itself: it asks DSM's
+  `authenticate.cgi` who the caller is and serves **DSM administrators only**.
+  Everything else gets `403`, and it fails closed (if the check cannot be
+  performed, nobody gets in). The reason for a refusal is written to
+  `service.log` (`helper-auth: ...`). Never expose port 42777.
 - State-changing requests are accepted only from the same origin (CSRF guard).
 - Directories and certificate paths must be under `/volumeN/` and must not
   contain `..` or point through symbolic links. The TorrServer directory must

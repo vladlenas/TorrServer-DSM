@@ -2,9 +2,27 @@ Ext.namespace("SYNO.SDS.TorrServer.Utils");
 
 Ext.apply(SYNO.SDS.TorrServer.Utils, function() {
     return {
+        // The helper only serves DSM administrators. It checks the DSM session
+        // itself, which needs the session's CSRF token (SynoToken); the helper
+        // moves it into a cookie and redirects to a clean URL.
+        getSynoToken: function() {
+            try {
+                return (SYNO.SDS.Session && SYNO.SDS.Session.SynoToken) || "";
+            } catch (e) {
+                return "";
+            }
+        },
+
         getMainHtml: function() {
+            var token = this.getSynoToken();
+            var src = "/webman/3rdparty/TorrServer/helper/";
+
+            if (token) {
+                src += "?SynoToken=" + encodeURIComponent(token);
+            }
+
             return '<iframe ' +
-                'src="/webman/3rdparty/TorrServer/helper/" ' +
+                'src="' + src + '" ' +
                 'title="TorrServer Helper" ' +
                 'style="width:100%;height:100%;border:0;margin:0;padding:0;display:block;" ' +
                 'frameborder="0"></iframe>';
