@@ -1,4 +1,4 @@
- #!/usr/bin/env python3
+#!/usr/bin/env python3
 
 import base64
 import html
@@ -11,25 +11,36 @@ import subprocess
 import time
 import threading
 import ssl
+import urllib.error
+import urllib.request
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, urlparse, quote
 
 
-HOST = "0.0.0.0"
-HELPER_PORT = 8095
-HELPER_HTTPS_PORT = 8096
+
+# The helper is only reachable through DSM nginx (see nginx/TorrServer.conf),
+# which proxies to 127.0.0.1. It must never listen on a public interface: it
+# has no authentication of its own.
+HOST = "127.0.0.1"
+HELPER_PORT = 42777
+
+MAX_POST_BYTES = 64 * 1024
+USERNAME_MAX_LENGTH = 64
 
 PACKAGE_NAME = "TorrServer"
 PACKAGE_VAR = "/var/packages/TorrServer/var"
-HELPER_TLS_CERT_FILE = os.path.join(PACKAGE_VAR, "server.pem")
-HELPER_TLS_KEY_FILE = os.path.join(PACKAGE_VAR, "server.key")
 TORRSERVER_BIN = "/var/packages/TorrServer/target/bin/TorrServer"
 TORRSERVER_LOG = os.path.join(PACKAGE_VAR, "TorrServer.log")
 
+SERVICE_LOG = os.path.join(PACKAGE_VAR, "service.log")
+
 LOG_FILES = {
-    "TorrServer.log": os.path.join(PACKAGE_VAR, "TorrServer.log"),
-    "TorrServer.log.1": os.path.join(PACKAGE_VAR, "TorrServer.log.1"),
+    "TorrServer.log": TORRSERVER_LOG,
+    "TorrServer.log.1": TORRSERVER_LOG + ".1",
+    "TorrServer.log.2": TORRSERVER_LOG + ".2",
+    "service.log": SERVICE_LOG,
 }
+ROTATED_LOGS = (TORRSERVER_LOG, SERVICE_LOG)
 LOG_MAX_SIZE = 2 * 1024 * 1024
 LOG_BACKUP_COUNT = 2
 
@@ -45,6 +56,9 @@ FORCE_HTTPS_FILE = os.path.join(PACKAGE_VAR, "torrserver.force.https")
 SSL_MODE_FILE = os.path.join(PACKAGE_VAR, "torrserver.ssl.mode")
 SSL_CERT_FILE = os.path.join(PACKAGE_VAR, "torrserver.ssl.cert")
 SSL_KEY_FILE = os.path.join(PACKAGE_VAR, "torrserver.ssl.key")
+
+HELPER_DIR = os.path.dirname(os.path.abspath(__file__))
+STATUS_LOGO_FILE = os.path.join(HELPER_DIR, "torrserver-status.png")
 
 SSL_CERT_MODE_SELF = "self"
 SSL_CERT_MODE_DSM = "dsm"
@@ -146,22 +160,32 @@ def read_file(path, default=""):
         return default
 
 
-def write_file(path, value):
+def write_file(path, value, mode=None):
+    """Atomically replace *path*. *mode* (e.g. 0o600) is applied at creation."""
     tmp = path + ".tmp"
 
-    with open(tmp, "w", encoding="utf-8") as f:
-        f.write(value)
+    try:
+        os.unlink(tmp)
+    except OSError:
+        pass
 
-    os.replace(tmp, path)
+    flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL
+    fd = os.open(tmp, flags, 0o644 if mode is None else mode)
+
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            f.write(value)
+        os.replace(tmp, path)
+    except Exception:
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
+        raise
 
 
-def get_dsm_version():
-    paths = [
-        "/etc.defaults/VERSION",
-        "/etc/VERSION",
-    ]
-
-    for path in paths:
+def read_dsm_version_file():
+    for path in ("/etc.defaults/VERSION", "/etc/VERSION"):
         try:
             data = {}
 
@@ -173,19 +197,24 @@ def get_dsm_version():
                         key, value = line.split("=", 1)
                         data[key.strip()] = value.strip().strip('"')
 
-            version = data.get("productversion", "")
-            build = data.get("buildnumber", "")
-
-            if version:
-                if build:
-                    return "{}-{}".format(version, build)
-
-                return version
+            if data:
+                return data
 
         except Exception:
             pass
 
-    return "Unknown"
+    return {}
+
+
+def get_dsm_version():
+    data = read_dsm_version_file()
+    version = data.get("productversion", "")
+    build = data.get("buildnumber", "")
+
+    if not version:
+        return "Unknown"
+
+    return "{}-{}".format(version, build) if build else version
 
 
 def get_nas_model():
@@ -194,32 +223,18 @@ def get_nas_model():
     if model:
         return model
 
-    try:
-        data = {}
+    data = read_dsm_version_file()
 
-        with open("/etc.defaults/VERSION", "r", encoding="utf-8") as f:
-            for line in f:
-                line = line.strip()
-
-                if "=" in line:
-                    key, value = line.split("=", 1)
-                    data[key.strip()] = value.strip().strip('"')
-
-        model = data.get("modelname", "").strip()
-        if model:
-            return model
-
-        unique = data.get("unique", "").strip()
-        if unique:
-            return unique
-
-    except Exception:
-        pass
-
-    return "Unknown"
+    return (
+        data.get("modelname", "").strip()
+        or data.get("unique", "").strip()
+        or "Unknown"
+    )
 
 
 def get_cpu_model():
+    hardware = ""
+
     try:
         with open("/proc/cpuinfo", "r", encoding="utf-8", errors="replace") as f:
             for line in f:
@@ -237,13 +252,10 @@ def get_cpu_model():
                     hardware = value
 
     except Exception:
-        hardware = ""
-
-    try:
-        if hardware:
-            return hardware
-    except Exception:
         pass
+
+    if hardware:
+        return hardware
 
     try:
         value = platform.processor().strip()
@@ -484,21 +496,38 @@ def get_ssl_paths():
     return read_file(SSL_CERT_FILE, "").strip(), read_file(SSL_KEY_FILE, "").strip()
 
 
-def has_privileged_access():
-    """Return True when the package can run its root-only certificate helper."""
-    if not os.path.isfile(CERTIFICATE_HELPER):
-        return False
+_PRIVILEGE_CACHE = {"time": 0.0, "value": False}
+PRIVILEGE_CACHE_SECONDS = 10
 
-    try:
-        result = subprocess.run(
-            ["/bin/sudo", "-n", CERTIFICATE_HELPER],
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-            timeout=5,
-        )
-        return result.returncode == 0
-    except Exception:
-        return False
+
+def has_privileged_access(use_cache=True):
+    """Return True when the package can run its root-only certificate helper.
+
+    Each check spawns sudo and a ``find`` over the certificate store, so the
+    result is cached briefly (a page render asks several times).
+    """
+    now = time.monotonic()
+
+    if use_cache and now - _PRIVILEGE_CACHE["time"] < PRIVILEGE_CACHE_SECONDS:
+        return _PRIVILEGE_CACHE["value"]
+
+    value = False
+
+    if os.path.isfile(CERTIFICATE_HELPER):
+        try:
+            result = subprocess.run(
+                ["/bin/sudo", "-n", CERTIFICATE_HELPER],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                timeout=5,
+            )
+            value = result.returncode == 0
+        except Exception:
+            value = False
+
+    _PRIVILEGE_CACHE["time"] = now
+    _PRIVILEGE_CACHE["value"] = value
+    return value
 
 
 def get_dsm_certificates():
@@ -717,6 +746,87 @@ def get_cache_dir(torrserver_dir=None):
     return os.path.join(root.rstrip("/"), "Cache")
 
 
+class _NoRedirect(urllib.request.HTTPRedirectHandler):
+    """Never follow redirects: urllib would turn a redirected POST into a GET
+    and we would mistake the HTML answer for success."""
+
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        return None
+
+
+def _local_tls_context():
+    # Loopback only: TorrServer's own (self-signed or DSM) certificate cannot
+    # match 127.0.0.1, so verification is intentionally disabled here.
+    context = ssl.create_default_context()
+    context.check_hostname = False
+    context.verify_mode = ssl.CERT_NONE
+    return context
+
+
+def torrserver_api(payload, http_port=None):
+    """POST *payload* to the running TorrServer ``/settings`` endpoint.
+
+    Tries HTTP first (the running instance may still be HTTP although the
+    saved flags already say HTTPS), then HTTPS. Returns ``(True, data)`` or
+    ``(False, error_message)``.
+    """
+    http_port = get_port() if http_port is None else int(http_port)
+    https_port = get_https_port()
+
+    endpoints = [("http://127.0.0.1:{}/settings".format(http_port), None)]
+    if https_port != http_port:
+        endpoints.append((
+            "https://127.0.0.1:{}/settings".format(https_port),
+            _local_tls_context(),
+        ))
+
+    body = json.dumps(payload).encode("utf-8")
+    auth_header = get_api_auth_header()
+    last_error = None
+
+    for url, context in endpoints:
+        request = urllib.request.Request(
+            url,
+            data=body,
+            headers={"Content-Type": "application/json"},
+            method="POST",
+        )
+        if auth_header:
+            request.add_header("Authorization", auth_header)
+
+        handlers = [_NoRedirect()]
+        if context is not None:
+            handlers.append(urllib.request.HTTPSHandler(context=context))
+        opener = urllib.request.build_opener(*handlers)
+
+        try:
+            with opener.open(request, timeout=5) as response:
+                raw = response.read().decode("utf-8", errors="replace")
+
+            if not raw.strip():
+                return True, {}
+
+            try:
+                return True, json.loads(raw)
+            except ValueError:
+                last_error = "unexpected response from TorrServer"
+
+        except urllib.error.HTTPError as e:
+            last_error = "HTTP Error {}: {}".format(e.code, e.reason)
+        except Exception as e:
+            last_error = str(e)
+
+    return False, last_error or "request failed"
+
+
+def _find_key(data, name):
+    lowered = name.lower()
+    for key in data:
+        if str(key).lower() == lowered:
+            return key
+    return None
+
+
 def get_cache_path():
     cache_dir = get_cache_dir()
     if cache_dir:
@@ -726,128 +836,93 @@ def get_cache_path():
     if local_path:
         return local_path
 
-    try:
-        import urllib.request
-
-        url = "http://127.0.0.1:{}/settings".format(get_port())
-        request = urllib.request.Request(
-            url,
-            data=json.dumps({"action": "get"}).encode("utf-8"),
-            headers={"Content-Type": "application/json"},
-            method="POST",
-        )
-
-        auth_header = get_api_auth_header()
-        if auth_header:
-            request.add_header("Authorization", auth_header)
-
-        with urllib.request.urlopen(request, timeout=3) as response:
-            data = json.loads(response.read().decode("utf-8"))
-
-        path = str(data.get("torrentsSavePath", "") or "").strip()
+    ok, data = torrserver_api({"action": "get"})
+    if ok and isinstance(data, dict):
+        key = _find_key(data, "TorrentsSavePath")
+        path = str(data.get(key, "") or "").strip() if key else ""
         if path:
-            write_file(CACHE_PATH_FILE, path)
+            try:
+                write_file(CACHE_PATH_FILE, path)
+            except OSError:
+                pass
             return path
-
-    except Exception:
-        pass
 
     return "/volume1/downloads"
 
 
 def set_cache_path(cache_path, port=None):
-    import urllib.request
-    import urllib.error
-    import ssl
-
-    # IMPORTANT: use the port/protocol that TorrServer is actually running on.
-    # The saved HTTPS/Force-HTTPS flags may describe the NEW configuration
-    # which has not been applied until Restart. Therefore we must not select
-    # HTTPS solely from get_https_enabled().
-    http_port = get_port() if port is None else int(port)
-    https_port = get_https_port()
-
-    payload = {
-        "action": "set",
-        "sets": {
-            "torrentsSavePath": cache_path
-        }
-    }
-
-    auth_header = get_api_auth_header()
-    last_error = None
-
-    # Try the current HTTP endpoint first. This is important immediately
-    # after saving "Enable HTTPS" but before the user presses Restart: the
-    # running TorrServer is still HTTP even though the config file now says
-    # HTTPS=1.
-    endpoints = [
-        ("http://127.0.0.1:{}/settings".format(http_port), None),
-    ]
-
-    # If the running instance is already HTTPS-only, HTTP may return a 3xx
-    # redirect or refuse the connection. In that case fall back to HTTPS.
-    if https_port != http_port:
-        endpoints.append(
-            ("https://127.0.0.1:{}/settings".format(https_port),
-             ssl._create_unverified_context())
+    # TorrServer's "set" replaces the whole settings object, so read the
+    # current settings, change one field and send everything back. Sending a
+    # partial object would reset every other TorrServer setting.
+    ok, data = torrserver_api({"action": "get"}, port)
+    if not ok:
+        return False, (
+            "Unable to read TorrServer settings (is TorrServer running?): {}"
+            .format(data)
         )
 
-    for url, ssl_context in endpoints:
-        request = urllib.request.Request(
-            url,
-            data=json.dumps(payload).encode("utf-8"),
-            headers={"Content-Type": "application/json"},
-            method="POST",
-        )
+    if not isinstance(data, dict) or not data:
+        return False, "Unable to read TorrServer settings: empty response"
 
-        if auth_header:
-            request.add_header("Authorization", auth_header)
+    key = _find_key(data, "TorrentsSavePath") or "TorrentsSavePath"
 
-        try:
-            if ssl_context is None:
-                response = urllib.request.urlopen(request, timeout=5)
-            else:
-                response = urllib.request.urlopen(
-                    request, timeout=5, context=ssl_context
-                )
+    if data.get(key) != cache_path:
+        data[key] = cache_path
+        ok, result = torrserver_api({"action": "set", "sets": data}, port)
+        if not ok:
+            return False, "Unable to apply cache directory: {}".format(result)
 
-            with response:
-                if response.status == 200:
-                    write_file(CACHE_PATH_FILE, cache_path)
-                    return True, ""
-
-                last_error = "HTTP Error {}".format(response.status)
-
-        except urllib.error.HTTPError as e:
-            last_error = "HTTP Error {}: {}".format(e.code, e.reason)
-            # A redirect is expected when the running instance forces HTTPS.
-            # Continue to the HTTPS endpoint below.
-            continue
-        except Exception as e:
-            last_error = str(e)
-            # Connection refused is expected when the running instance is
-            # HTTPS-only. Continue to the HTTPS endpoint below.
-            continue
-
-    return False, "Unable to apply cache directory: {}".format(last_error or "request failed")
+    write_file(CACHE_PATH_FILE, cache_path)
+    return True, ""
 
 
 PASSWORD_PLACEHOLDER = "••••••••"
 
 
-def get_saved_account():
+def load_accounts():
     try:
         with open(ACCS_FILE, "r", encoding="utf-8") as f:
-            accounts = json.load(f)
-
-        if not isinstance(accounts, dict) or not accounts:
-            return "", ""
-
-        username, password = next(iter(accounts.items()))
-        return str(username), str(password)
+            data = json.load(f)
+        return data if isinstance(data, dict) else {}
     except Exception:
+        return {}
+
+
+def get_saved_account():
+    accounts = load_accounts()
+    if not accounts:
         return "", ""
+
+    username, password = next(iter(accounts.items()))
+    return str(username), str(password)
+
+
+def save_account(username, password, previous_username=""):
+    """Store the helper-managed account first, keeping other TorrServer users."""
+    accounts = load_accounts()
+
+    if previous_username and previous_username != username:
+        accounts.pop(previous_username, None)
+
+    ordered = {username: password}
+    for name, value in accounts.items():
+        if name != username:
+            ordered[name] = value
+
+    write_file(ACCS_FILE, json.dumps(ordered), mode=0o600)
+
+
+def valid_username(username):
+    # ":" would break HTTP Basic auth; control characters are never valid.
+    return bool(re.match(r"^[^:\x00-\x1f\x7f]{1,%d}$" % USERNAME_MAX_LENGTH, username))
+
+
+def valid_volume_path(path):
+    parts = path.split("/")
+    return (
+        bool(re.match(r"^/volume[0-9]+/[^\x00]+$", path))
+        and ".." not in parts
+    )
 
 
 def get_listening_tcp_ports():
@@ -862,9 +937,8 @@ def get_listening_tcp_ports():
                     if len(parts) < 4 or parts[3] != "0A":
                         continue
 
-                    local_address = parts[1]
                     try:
-                        _, port_hex = local_address.rsplit(":", 1)
+                        _, port_hex = parts[1].rsplit(":", 1)
                         ports.add(int(port_hex, 16))
                     except (ValueError, TypeError):
                         continue
@@ -879,130 +953,135 @@ def is_port_in_use(port_number, allowed_ports=None):
     return port_number in (get_listening_tcp_ports() - allowed_ports)
 
 
+def parse_port(value, label):
+    if not value.isdigit():
+        return None, "Invalid {}".format(label)
+
+    number = int(value)
+    if number < 1024 or number > 65535:
+        return None, "{} must be between 1024 and 65535".format(label)
+
+    return number, ""
+
+
 def save_settings(params):
-    port = params.get("port", [""])[0].strip()
-    auth = params.get("auth", ["0"])[0]
-    username = params.get("username", [""])[0].strip()
-    password = params.get("password", [""])[0]
-    torrserver_dir = params.get("torrserver_dir", [""])[0].strip()
-    fuse = params.get("fuse", ["0"])[0]
-    https = params.get("https", ["0"])[0]
-    https_port = params.get("https_port", ["8091"])[0].strip()
-    force_https = params.get("force_https", ["0"])[0]
-    ssl_mode = params.get("ssl_mode", [SSL_CERT_MODE_SELF])[0].strip().lower()
-    ssl_cert = params.get("ssl_cert", [""])[0].strip()
-    ssl_key = params.get("ssl_key", [""])[0].strip()
+    def field(name, default=""):
+        return params.get(name, [default])[0]
+
+    port = field("port").strip()
+    auth = field("auth", "0")
+    username = field("username").strip()
+    password = field("password")
+    torrserver_dir = field("torrserver_dir").strip()
+    fuse = field("fuse", "0")
+    https = field("https", "0")
+    https_port = field("https_port", "8091").strip()
+    force_https = field("force_https", "0")
+    ssl_mode = field("ssl_mode", SSL_CERT_MODE_SELF).strip().lower()
+    ssl_cert = field("ssl_cert").strip()
+    ssl_key = field("ssl_key").strip()
 
     old_port = get_port()
     old_https_port = get_https_port()
     saved_username, saved_password = get_saved_account()
 
-    if ssl_mode not in (SSL_CERT_MODE_SELF, SSL_CERT_MODE_DSM, SSL_CERT_MODE_MANUAL):
-        return False, "Invalid certificate mode"
+    # ---- 1. Validate everything first; nothing is changed until all pass.
 
     if not has_privileged_access():
         return False, "Additional DSM permissions are required to save settings"
 
+    if ssl_mode not in (SSL_CERT_MODE_SELF, SSL_CERT_MODE_DSM, SSL_CERT_MODE_MANUAL):
+        return False, "Invalid certificate mode"
+
     if not torrserver_dir:
         return False, "TorrServer directory is required"
 
-    safe_torrserver_dir = cache_browser_path(torrserver_dir)
-    if safe_torrserver_dir != torrserver_dir:
+    if len(torrserver_dir) > 1:
+        torrserver_dir = torrserver_dir.rstrip("/")
+
+    if re.search(r"\s", torrserver_dir):
+        return False, "TorrServer directory must not contain spaces"
+
+    if cache_browser_path(torrserver_dir) != torrserver_dir:
         return False, "Invalid TorrServer directory"
 
-    ok, directory_message = prepare_torrserver_directory(torrserver_dir)
-    if not ok:
-        return False, directory_message
-
-    cache_path = get_cache_dir(torrserver_dir)
-
-    if ssl_mode in (SSL_CERT_MODE_DSM, SSL_CERT_MODE_MANUAL) and not has_privileged_access():
-        return False, "Additional DSM permissions are required for this certificate mode"
-
-    if ssl_mode == SSL_CERT_MODE_MANUAL and (not ssl_cert or not ssl_key):
-        return False, "Certificate and key paths are required"
+    if ssl_mode == SSL_CERT_MODE_MANUAL:
+        if not ssl_cert or not ssl_key:
+            return False, "Certificate and key paths are required"
+        if not valid_volume_path(ssl_cert) or not valid_volume_path(ssl_key):
+            return False, "Manual certificate and key must be inside /volumeX/"
 
     if ssl_mode == SSL_CERT_MODE_DSM:
         valid = {(x["cert"], x["key"]) for x in get_dsm_certificates()}
         if (ssl_cert, ssl_key) not in valid:
             return False, "Invalid DSM certificate selection"
 
-    if not port.isdigit():
-        return False, "Invalid port"
+    port_number, error = parse_port(port, "Web port")
+    if port_number is None:
+        return False, error
 
-    port_number = int(port)
+    https_port_number, error = parse_port(https_port, "HTTPS port")
+    if https_port_number is None:
+        return False, error
 
-    if port_number < 1024 or port_number > 65535:
-        return False, "Web port must be between 1024 and 65535"
-
-    if not https_port.isdigit():
-        return False, "Invalid HTTPS port"
-
-    https_port_number = int(https_port)
-
-    if https_port_number < 1024 or https_port_number > 65535:
-        return False, "HTTPS port must be between 1024 and 65535"
-
-    if port_number in (HELPER_PORT, HELPER_HTTPS_PORT):
+    if port_number == HELPER_PORT:
         return False, "Web port {} is reserved for TorrServer Helper".format(port_number)
-
-    if https_port_number in (HELPER_PORT, HELPER_HTTPS_PORT):
-        return False, "HTTPS port {} is reserved for TorrServer Helper".format(https_port_number)
-
-    if https == "1" and https_port_number == port_number:
-        return False, "HTTPS port must differ from Web port"
-
-    if port_number == old_https_port and port_number != old_port:
-        return False, "Web port {} is currently used by TorrServer HTTPS".format(port_number)
-
-    if https_port_number == old_port and https_port_number != old_https_port:
-        return False, "HTTPS port {} is currently used by TorrServer HTTP".format(https_port_number)
 
     if is_port_in_use(port_number, allowed_ports={old_port}):
         return False, "Web port {} is already in use".format(port_number)
 
-    if is_port_in_use(https_port_number, allowed_ports={old_https_port}):
-        return False, "HTTPS port {} is already in use".format(https_port_number)
+    # The HTTPS port only matters when HTTPS is enabled.
+    if https == "1":
+        if https_port_number == HELPER_PORT:
+            return False, "HTTPS port {} is reserved for TorrServer Helper".format(https_port_number)
+
+        if https_port_number == port_number:
+            return False, "HTTPS port must differ from Web port"
+
+        if is_port_in_use(https_port_number, allowed_ports={old_https_port}):
+            return False, "HTTPS port {} is already in use".format(https_port_number)
 
     if auth == "1":
         if not username:
             return False, "Username is required"
 
+        if not valid_username(username):
+            return False, "Username must not contain ':' or control characters"
+
         if password == PASSWORD_PLACEHOLDER or not password:
-            if saved_password:
+            # The stored password may only be reused for the same account.
+            if saved_password and username == saved_username:
                 password = saved_password
             else:
                 return False, "Password is required"
 
+    # ---- 2. Apply. Side effects start only after validation succeeded.
+
+    ok, directory_message = prepare_torrserver_directory(torrserver_dir)
+    if not ok:
+        return False, directory_message
+
     # TorrServer is still listening on old_port at this point.
-    # Apply API-backed settings before changing its configured port.
-    ok, cache_message = set_cache_path(cache_path, old_port)
+    ok, cache_message = set_cache_path(get_cache_dir(torrserver_dir), old_port)
     if not ok:
         return False, cache_message
 
-    write_file(TORRSERVER_DIR_FILE, torrserver_dir)
+    try:
+        if auth == "1":
+            save_account(username, password, saved_username)
 
-    if auth == "1":
-        account = {
-            username: password
-        }
-
-        with open(ACCS_FILE, "w", encoding="utf-8") as f:
-            json.dump(account, f)
-
-        write_file(AUTH_FILE, "1")
-    else:
-        write_file(AUTH_FILE, "0")
-
-    write_file(FUSE_FILE, "1" if fuse == "1" else "0")
-
-    write_file(PORT_FILE, str(port_number))
-    write_file(HTTPS_PORT_FILE, str(https_port_number))
-    write_file(HTTPS_FILE, "1" if https == "1" else "0")
-    write_file(FORCE_HTTPS_FILE, "1" if force_https == "1" and https == "1" else "0")
-    write_file(SSL_MODE_FILE, ssl_mode)
-    write_file(SSL_CERT_FILE, ssl_cert)
-    write_file(SSL_KEY_FILE, ssl_key)
+        write_file(TORRSERVER_DIR_FILE, torrserver_dir)
+        write_file(AUTH_FILE, "1" if auth == "1" else "0")
+        write_file(FUSE_FILE, "1" if fuse == "1" else "0")
+        write_file(PORT_FILE, str(port_number))
+        write_file(HTTPS_PORT_FILE, str(https_port_number))
+        write_file(HTTPS_FILE, "1" if https == "1" else "0")
+        write_file(FORCE_HTTPS_FILE, "1" if force_https == "1" and https == "1" else "0")
+        write_file(SSL_MODE_FILE, ssl_mode)
+        write_file(SSL_CERT_FILE, ssl_cert)
+        write_file(SSL_KEY_FILE, ssl_key)
+    except OSError as e:
+        return False, "Unable to write settings: {}".format(e)
 
     return True, "Settings saved"
 
@@ -1035,35 +1114,37 @@ def get_log_by_name(name):
         return "Unable to read log: {}".format(e)
 
 
-def rotate_log_if_needed():
+def rotate_log(path):
     try:
-        if not os.path.isfile(TORRSERVER_LOG):
+        if not os.path.isfile(path):
             return
 
-        if os.path.getsize(TORRSERVER_LOG) < LOG_MAX_SIZE:
+        if os.path.getsize(path) < LOG_MAX_SIZE:
             return
 
-        oldest = "{}.{}".format(TORRSERVER_LOG, LOG_BACKUP_COUNT)
+        oldest = "{}.{}".format(path, LOG_BACKUP_COUNT)
         if os.path.exists(oldest):
             os.remove(oldest)
 
         for number in range(LOG_BACKUP_COUNT - 1, 0, -1):
-            source = "{}.{}".format(TORRSERVER_LOG, number)
-            target = "{}.{}".format(TORRSERVER_LOG, number + 1)
+            source = "{}.{}".format(path, number)
+            target = "{}.{}".format(path, number + 1)
 
             if os.path.exists(source):
                 os.replace(source, target)
 
-        shutil.copyfile(
-            TORRSERVER_LOG,
-            "{}.1".format(TORRSERVER_LOG),
-        )
-
-        with open(TORRSERVER_LOG, "r+", encoding="utf-8") as f:
-            f.truncate(0)
+        # copy + truncate: the writer keeps its file descriptor, so the file
+        # cannot be renamed away.
+        shutil.copyfile(path, "{}.1".format(path))
+        os.truncate(path, 0)
 
     except Exception:
         pass
+
+
+def rotate_log_if_needed():
+    for path in ROTATED_LOGS:
+        rotate_log(path)
 
 
 def page_header(title="TorrServer"):
@@ -1410,6 +1491,23 @@ pre {{
     line-height: 58px;
     text-align: center;
     margin-right: 18px;
+}}
+
+.status-logo {{
+    width: 72px;
+    height: 72px;
+    flex: 0 0 72px;
+    margin-right: 18px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}}
+
+.status-logo img {{
+    width: 72px;
+    height: 72px;
+    object-fit: contain;
+    display: block;
 }}
 
 .status-text {{
@@ -2019,6 +2117,15 @@ def get_network_rates():
     )
 
 
+
+def get_status_logo_data_uri():
+    try:
+        with open(STATUS_LOGO_FILE, "rb") as f:
+            encoded = base64.b64encode(f.read()).decode("ascii")
+        return "data:image/png;base64,{}".format(encoded)
+    except Exception:
+        return ""
+
 def main_page(host):
     status = get_status()
 
@@ -2064,6 +2171,8 @@ def main_page(host):
         else "status-stopped"
     )
 
+    status_logo = get_status_logo_data_uri()
+
     body = page_header("TorrServer")
 
     body += """
@@ -2091,7 +2200,9 @@ def main_page(host):
 <div class="app-title">Status</div>
 
 <div class="status-banner">
-    <div class="status-symbol">✓</div>
+    <div class="status-logo">
+        <img src="{16}" alt="TorrServer">
+    </div>
     <div class="status-text">
         <div class="{0}">{1}</div>
         <div class="status-subtitle">{14}</div>
@@ -2205,6 +2316,7 @@ def main_page(host):
         html.escape(get_architecture()),
         "TorrServer is running normally.",
         '<div class="web-ui-actions">{}</div>'.format(web_ui_actions) if web_ui_actions else '',
+        status_logo,
     )
 
     body += page_footer()
@@ -2221,15 +2333,13 @@ def media_recommendations_page():
         <strong>Plex</strong>
         <p>
             FUSE can be used as a media library source for Plex.
-            Keep <b>Show only active torrents</b> disabled so Plex can see the library without starting torrents.
+            Keep <b>“Show only active torrents”</b> disabled so Plex can see the library without starting torrents.
         </p>
         <p>
-            To avoid unnecessary reads of large virtual files, disable <b>Perform extensive file analysis during maintenance</b>
-            and disable <b>video preview thumbnails</b> in Plex.
+            To avoid unnecessary reads of large virtual files, disable <b>“Perform extensive file analysis during maintenance”</b> and <b>“video preview thumbnails”</b> in Plex.
         </p>
         <p>
-            Normal library scanning can remain enabled. Background analysis and thumbnail generation
-            may read large virtual files and cause significant CPU, network and storage load.
+            Normal library scanning can remain enabled. Background analysis and thumbnail generation may read large virtual files and cause significant CPU, network and storage load.
         </p>
     </div>
 
@@ -2836,15 +2946,71 @@ class Handler(BaseHTTPRequestHandler):
     def redirect(self, location):
         self.send_response(302)
         self.send_header("Location", location)
+        self.send_header("Content-Length", "0")
         self.end_headers()
+
+    def request_host(self):
+        """Host name from the Host header, restricted to hostname characters
+        so it is safe to embed in HTML."""
+        raw = (self.headers.get("Host", "") or "").strip()
+
+        if raw.startswith("["):
+            name = raw.split("]", 1)[0] + "]"
+        else:
+            name = raw.split(":", 1)[0]
+
+        if re.match(r"^[A-Za-z0-9._\-\[\]:]{1,255}$", name):
+            return name
+
+        return "localhost"
+
+    def is_same_origin(self):
+        """CSRF guard: a POST must come from a page served by this host.
+
+        Browsers always send Origin (or at least Referer) on cross-site form
+        posts, so a missing or foreign value is rejected.
+        """
+        expected = self.request_host().strip("[]").lower()
+
+        for header in ("Origin", "Referer"):
+            value = self.headers.get(header)
+            if not value:
+                continue
+
+            try:
+                actual = urlparse(value).hostname
+            except ValueError:
+                return False
+
+            return bool(actual) and actual.lower() == expected
+
+        return False
+
+    def read_post_params(self):
+        """Return parsed form parameters, or None after sending an error."""
+        try:
+            length = int(self.headers.get("Content-Length", "0") or "0")
+        except ValueError:
+            self.send_text("Invalid Content-Length", 400)
+            return None
+
+        if length < 0:
+            self.send_text("Invalid Content-Length", 400)
+            return None
+
+        if length > MAX_POST_BYTES:
+            self.send_text("Request too large", 413)
+            return None
+
+        body = self.rfile.read(length).decode("utf-8", errors="replace")
+        return parse_qs(body)
 
     def do_GET(self):
         parsed = urlparse(self.path)
         path = parsed.path
 
         if path == "/":
-            host = self.headers.get("Host", "").split(":")[0]
-            self.send_html(main_page(host))
+            self.send_html(main_page(self.request_host()))
             return
 
         if path == "/settings":
@@ -2928,25 +3094,19 @@ class Handler(BaseHTTPRequestHandler):
 
             return
 
-        if path == "/restart":
-            host = self.headers.get("Host", "").split(":")[0]
-            self.send_html(main_page(host))
-            return
-
         self.send_html("Not Found", 404)
 
     def do_POST(self):
         parsed = urlparse(self.path)
         path = parsed.path
 
-        length = int(self.headers.get("Content-Length", "0"))
+        if not self.is_same_origin():
+            self.send_text("Forbidden: cross-site request rejected", 403)
+            return
 
-        body = self.rfile.read(length).decode(
-            "utf-8",
-            errors="replace",
-        )
-
-        params = parse_qs(body)
+        params = self.read_post_params()
+        if params is None:
+            return
 
         if path == "/language":
             language = params.get("language", ["en"])[0]
@@ -3003,7 +3163,7 @@ class Handler(BaseHTTPRequestHandler):
                 )
 
             return
-            
+
         self.send_html("Not Found", 404)
 
     def log_message(self, format_string, *args):
@@ -3017,32 +3177,11 @@ def log_rotation_loop():
 
 
 def run():
-    http_server = ThreadingHTTPServer(
-        (HOST, HELPER_PORT),
-        Handler,
-    )
-
-    servers = [http_server]
-
-    # DSM Desktop is normally served over HTTPS.  An HTTP iframe would be
-    # blocked by the browser as mixed content, so expose the same helper over
-    # HTTPS as well. The package certificate-helper keeps server.pem/server.key
-    # synchronized with the selected DSM/TorrServer certificate.
-    if os.path.isfile(HELPER_TLS_CERT_FILE) and os.path.isfile(HELPER_TLS_KEY_FILE):
-        try:
-            https_server = ThreadingHTTPServer(
-                (HOST, HELPER_HTTPS_PORT),
-                Handler,
-            )
-            context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
-            context.load_cert_chain(HELPER_TLS_CERT_FILE, HELPER_TLS_KEY_FILE)
-            https_server.socket = context.wrap_socket(
-                https_server.socket,
-                server_side=True,
-            )
-            servers.append(https_server)
-        except Exception as exc:
-            print("Helper HTTPS disabled: {}".format(exc), flush=True)
+    # Plain HTTP on loopback only. DSM nginx terminates TLS and proxies
+    # /webman/3rdparty/TorrServer/helper/ here, so the browser never talks to
+    # this port directly (no mixed content, no unauthenticated LAN exposure).
+    server = ThreadingHTTPServer((HOST, HELPER_PORT), Handler)
+    server.daemon_threads = True
 
     rotation_thread = threading.Thread(
         target=log_rotation_loop,
@@ -3050,14 +3189,12 @@ def run():
     )
     rotation_thread.start()
 
-    threads = []
-    for server in servers:
-        thread = threading.Thread(target=server.serve_forever, daemon=True)
-        thread.start()
-        threads.append(thread)
-
-    for thread in threads:
-        thread.join()
+    try:
+        server.serve_forever()
+    except KeyboardInterrupt:
+        pass
+    finally:
+        server.server_close()
 
 
 if __name__ == "__main__":

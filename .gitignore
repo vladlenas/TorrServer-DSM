@@ -1,3 +1,5 @@
 spk/
 dest_bin/
 build/
+__pycache__/
+*.pyc
