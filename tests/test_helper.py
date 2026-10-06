@@ -389,6 +389,17 @@ class DirectoryTests(Base):
         self.privileged = False
         self.real = (h.subprocess.run, h.has_privileged_access, os.mkdir, os.access)
         h.has_privileged_access = lambda use_cache=True: self.privileged
+        # The helper checks that the root script exists. Do not rely on the
+        # machine running the tests having the package installed.
+        tools = tempfile.mkdtemp(prefix="ts-tools-")
+        self.addCleanup(shutil.rmtree, tools, True)
+        self.script = os.path.join(tools, "prepare-directory")
+        with open(self.script, "w") as f:
+            f.write("#!/bin/sh\n")
+        os.chmod(self.script, 0o755)
+        self.real_script = h.PREPARE_DIRECTORY
+        h.PREPARE_DIRECTORY = self.script
+        self.addCleanup(setattr, h, "PREPARE_DIRECTORY", self.real_script)
 
         def run(cmd, **kwargs):
             self.sudo_calls.append(cmd)
@@ -431,7 +442,16 @@ class DirectoryTests(Base):
         ok, _ = h.prepare_torrserver_directory(self.base)
         self.assertTrue(ok)
         (cmd,) = self.sudo_calls
-        self.assertEqual(cmd, ["/bin/sudo", "-n", h.PREPARE_DIRECTORY, self.base])
+        self.assertEqual(cmd, ["/bin/sudo", "-n", self.script, self.base])
+
+    def test_missing_root_script_is_reported_without_calling_sudo(self):
+        self.deny_creation()
+        self.privileged = True
+        os.unlink(self.script)
+        ok, message = h.prepare_torrserver_directory(self.base)
+        self.assertFalse(ok)
+        self.assertEqual(message, "Directory preparation script not found")
+        self.assertEqual(self.sudo_calls, [])
 
     def test_existing_directory_that_is_not_writable_needs_root(self):
         for name in ("Cache", "FUSE"):
