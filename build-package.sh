@@ -5,20 +5,56 @@ TORRSERVER_VERSION=$1
 ARCH=$2
 PKG_VERSION=$3
 
+# Downloads are cached per version and written to a temporary file first, so a
+# changed TORRSERVER_VERSION is fetched again and an interrupted download is
+# never mistaken for a finished one.
+download_file() {
+    local url=$1
+    local dest=$2
+    local part="${dest}.part"
+
+    rm -f "${part}"
+    mkdir -p "$(dirname "${dest}")"
+
+    if ! wget -q -O "${part}" "${url}"; then
+        rm -f "${part}"
+        echo "ERROR: download failed: ${url}" >&2
+        exit 1
+    fi
+
+    if [[ ! -s ${part} ]]; then
+        rm -f "${part}"
+        echo "ERROR: empty download: ${url}" >&2
+        exit 1
+    fi
+
+    mv -f "${part}" "${dest}"
+}
+
+torrserver_bin_path() {
+    echo "dest_bin/${TORRSERVER_VERSION}/TorrServer-linux-${ARCH}"
+}
+
 download_torrserver() {
     local base_url="https://github.com/YouROK/TorrServer/releases/download/${TORRSERVER_VERSION}"
     local bin_name="TorrServer-linux-${ARCH}"
-    local src_bin="${base_url}/${bin_name}"
-    local dest_bin="dest_bin"
+    local dest_bin
+    dest_bin="$(torrserver_bin_path)"
 
-    if [[ -f ${dest_bin}/TorrServer-linux-${ARCH} ]]; then
-        echo ">>> Binaries already exist: ${bin_name}"
+    if [[ -s ${dest_bin} ]]; then
+        echo ">>> Binaries already exist: ${bin_name} (${TORRSERVER_VERSION})"
         return
     fi
 
-    echo ">>> Downloading TorrServer-linux-${ARCH}:"
-    mkdir -p "${dest_bin}"
-    wget -q -P ${dest_bin} ${src_bin}
+    echo ">>> Downloading ${bin_name} ${TORRSERVER_VERSION}:"
+    download_file "${base_url}/${bin_name}" "${dest_bin}"
+
+    # Guard against saving an HTML error page as the binary.
+    if [[ "$(head -c 4 "${dest_bin}" | od -An -c | tr -d ' ')" != '177ELF' ]]; then
+        rm -f "${dest_bin}"
+        echo "ERROR: ${bin_name} is not an ELF binary" >&2
+        exit 1
+    fi
 }
 
 download_ffprobe() {
@@ -52,7 +88,7 @@ download_ffprobe() {
 
     mkdir -p "${dest_bin}" "${tmp_dir}"
 
-    wget -q -O "${tmp_dir}/ffprobe.zip" "${ffprobe_url}"
+    download_file "${ffprobe_url}" "${tmp_dir}/ffprobe.zip"
     unzip -q "${tmp_dir}/ffprobe.zip" -d "${tmp_dir}"
 
     mv "${tmp_dir}/ffprobe" "${ffprobe_bin}"
@@ -65,7 +101,8 @@ make_inner_pkg() {
     local tmp_dir=$1
     local dest_dir=$2
     local dest_pkg="$dest_dir/package.tgz"
-    local torrserver_bin="dest_bin/TorrServer-linux-${ARCH}"
+    local torrserver_bin
+    torrserver_bin="$(torrserver_bin_path)"
     local ffprobe_bin="dest_bin/ffprobe-${ARCH}"
 
     echo ">>> Making inner package.tgz"

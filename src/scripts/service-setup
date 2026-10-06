@@ -6,134 +6,224 @@ if [ -z "${SYNOPKG_PKGNAME}" ] || [ -z "${SYNOPKG_DSM_VERSION_MAJOR}" ]; then
     exit 1
 fi
 
+# NOTE: this file is sourced by installer and start-stop-status (including on
+# every "status" poll). Top level must only compute variables. Anything with
+# side effects belongs in a service_* function below.
+
+# Bump when the layout of ${SYNOPKG_PKGVAR} changes; migrate_config() uses it.
+CONFIG_SCHEMA=2
+
 USER="TorrServer"
 EFF_USER="TorrServer"
 
-LOG_FILE="/var/packages/${SYNOPKG_PKGNAME}/var/${SYNOPKG_PKGNAME}.log"
-PID_FILE="/var/packages/${SYNOPKG_PKGNAME}/var/${SYNOPKG_PKGNAME}.pid"
-CONFIG_DIR="/var/packages/${SYNOPKG_PKGNAME}/var"
+CONFIG_DIR="${SYNOPKG_PKGVAR:-/var/packages/${SYNOPKG_PKGNAME}/var}"
+# Stdout/stderr of the service itself. Must not be the same file as TorrServer's
+# own log (-l), otherwise every start truncates it.
+LOG_FILE="${CONFIG_DIR}/service.log"
+PID_FILE="${CONFIG_DIR}/${SYNOPKG_PKGNAME}.pid"
 TORRSERVER_LOG="${CONFIG_DIR}/TorrServer.log"
 CERTIFICATE_HELPER="/var/packages/${SYNOPKG_PKGNAME}/scripts/certificate-helper"
+SCHEMA_FILE="${CONFIG_DIR}/config.schema"
 
-TORRSERVER_PORT="8090"
-if [ -r "${CONFIG_DIR}/torrserver.port" ]; then
-    SAVED_PORT="$(cat "${CONFIG_DIR}/torrserver.port" 2>/dev/null)"
-    case "${SAVED_PORT}" in
-        ''|*[!0-9]*) ;;
-        *)
-            if [ "${SAVED_PORT}" -ge 1 ] 2>/dev/null &&
-               [ "${SAVED_PORT}" -le 65535 ] 2>/dev/null; then
-                TORRSERVER_PORT="${SAVED_PORT}"
-            fi
+read_port_file()
+{
+    # $1 = file, $2 = default
+    _value="$(cat "$1" 2>/dev/null)"
+    case "${_value}" in
+        ''|*[!0-9]*)
+            echo "$2"
+            return
             ;;
     esac
-fi
 
-AUTH_ENABLED="0"
+    if [ "${_value}" -ge 1 ] 2>/dev/null && [ "${_value}" -le 65535 ] 2>/dev/null; then
+        echo "${_value}"
+    else
+        echo "$2"
+    fi
+}
+
+TORRSERVER_PORT="$(read_port_file "${CONFIG_DIR}/torrserver.port" 8090)"
+HTTPS_PORT="$(read_port_file "${CONFIG_DIR}/torrserver.https.port" 8091)"
+
+AUTH_ARGS=""
 if [ "$(cat "${CONFIG_DIR}/torrserver.auth" 2>/dev/null)" = "1" ] &&
    [ -r "${CONFIG_DIR}/accs.db" ]; then
-    AUTH_ENABLED="1"
+    AUTH_ARGS="-a"
 fi
 
 HTTPS_ENABLED="0"
+SSL_ARGS=""
 if [ "$(cat "${CONFIG_DIR}/torrserver.https" 2>/dev/null)" = "1" ]; then
     HTTPS_ENABLED="1"
-fi
-
-HTTPS_PORT="8091"
-if [ -r "${CONFIG_DIR}/torrserver.https.port" ]; then
-    SAVED_HTTPS_PORT="$(cat "${CONFIG_DIR}/torrserver.https.port" 2>/dev/null)"
-    case "${SAVED_HTTPS_PORT}" in
-        ''|*[!0-9]*) ;;
-        *)
-            if [ "${SAVED_HTTPS_PORT}" -ge 1 ] 2>/dev/null &&
-               [ "${SAVED_HTTPS_PORT}" -le 65535 ] 2>/dev/null; then
-                HTTPS_PORT="${SAVED_HTTPS_PORT}"
-            fi
-            ;;
-    esac
-fi
-
-TORRSERVER_SSL_ARGS=""
-if [ "${HTTPS_ENABLED}" = "1" ]; then
-    TORRSERVER_SSL_ARGS="--ssl --sslport ${HTTPS_PORT}"
+    SSL_ARGS="--ssl --sslport ${HTTPS_PORT}"
 
     if [ "$(cat "${CONFIG_DIR}/torrserver.force.https" 2>/dev/null)" = "1" ]; then
-        TORRSERVER_SSL_ARGS="${TORRSERVER_SSL_ARGS} --force-https"
+        SSL_ARGS="${SSL_ARGS} --force-https"
     fi
 fi
 
-TORRSERVER_FUSE_ARGS=""
+# SERVICE_COMMAND is split on whitespace by start-stop-status, so a FUSE path
+# with spaces cannot be passed safely and is skipped.
+FUSE_ARGS=""
 if [ "$(cat "${CONFIG_DIR}/torrserver.fuse" 2>/dev/null)" = "1" ]; then
-    TORRSERVER_DIR="$(cat "${CONFIG_DIR}/torrserver.dir" 2>/dev/null)"
+    _dir="$(cat "${CONFIG_DIR}/torrserver.dir" 2>/dev/null)"
 
-    if [ -n "${TORRSERVER_DIR}" ]; then
-        TORRSERVER_FUSE_PATH="${TORRSERVER_DIR%/}/FUSE"
+    if [ -n "${_dir}" ]; then
+        _fuse_path="${_dir%/}/FUSE"
 
-        if [ -d "${TORRSERVER_FUSE_PATH}" ]; then
-            TORRSERVER_FUSE_ARGS="--fusepath ${TORRSERVER_FUSE_PATH}"
-        fi
+        case "${_fuse_path}" in
+            *[[:space:]]*)
+                FUSE_SKIPPED_REASON="FUSE path contains spaces: ${_fuse_path}"
+                ;;
+            *)
+                if [ -d "${_fuse_path}" ]; then
+                    FUSE_ARGS="--fusepath ${_fuse_path}"
+                fi
+                ;;
+        esac
     fi
 fi
+
+SERVICE_COMMAND="/bin/python3 ${SYNOPKG_PKGDEST}/helper/helper.py
+${SYNOPKG_PKGDEST}/bin/TorrServer -d ${SYNOPKG_PKGVAR} -p ${TORRSERVER_PORT} ${AUTH_ARGS} ${SSL_ARGS} ${FUSE_ARGS} -l ${TORRSERVER_LOG}"
+
+SVC_BACKGROUND=y
+SVC_WRITE_PID=y
 
 update_firewall_port()
 {
-    local sc_file="${SYNOPKG_PKGDEST}/ui/TorrServer.sc"
-    local firewall_ports="${TORRSERVER_PORT},8095"
+    sc_file="${SYNOPKG_PKGDEST}/ui/TorrServer.sc"
+    firewall_ports="${TORRSERVER_PORT}"
 
     if [ "${HTTPS_ENABLED}" = "1" ]; then
         firewall_ports="${firewall_ports},${HTTPS_PORT}"
     fi
 
-    cat > "${sc_file}" <<EOF2
-[torrserver]
-title="TorrServer DSM"
-desc="TorrServer DSM"
-port_forward="yes"
-dst.ports="${firewall_ports}/tcp"
-EOF2
+    # The helper listens on 127.0.0.1 only (reached through DSM nginx), so its
+    # port is intentionally not exposed here.
+    new_content="[torrserver]
+title=\"TorrServer DSM\"
+desc=\"TorrServer DSM\"
+port_forward=\"yes\"
+dst.ports=\"${firewall_ports}/tcp\""
 
+    if [ "$(cat "${sc_file}" 2>/dev/null)" = "${new_content}" ]; then
+        return 0
+    fi
+
+    printf '%s\n' "${new_content}" > "${sc_file}" 2>/dev/null || return 0
     /usr/syno/sbin/synopkghelper update "${SYNOPKG_PKGNAME}" port-config >/dev/null 2>&1
 }
 
-if [ -d "${SYNOPKG_PKGDEST}/ui" ]; then
-    update_firewall_port
-fi
-
-if [ -x "${CERTIFICATE_HELPER}" ]; then
-    /bin/sudo -n "${CERTIFICATE_HELPER}" sync
-    if [ "$?" -ne 0 ]; then
-        echo "Warning: TLS certificate synchronization is unavailable. Configure DSM permissions if required." 1>&2
+# Called by start-stop-status right before the daemon is started.
+service_prestart()
+{
+    if [ -n "${FUSE_SKIPPED_REASON}" ]; then
+        echo "Warning: ${FUSE_SKIPPED_REASON}. FUSE is disabled for this start."
     fi
-fi
 
-if [ "${AUTH_ENABLED}" = "1" ]; then
-    SERVICE_COMMAND="/bin/python3 ${SYNOPKG_PKGDEST}/helper/helper.py
-${SYNOPKG_PKGDEST}/bin/TorrServer -d ${SYNOPKG_PKGVAR} -p ${TORRSERVER_PORT} -a ${TORRSERVER_SSL_ARGS} ${TORRSERVER_FUSE_ARGS} -l ${TORRSERVER_LOG}"
-else
-    SERVICE_COMMAND="/bin/python3 ${SYNOPKG_PKGDEST}/helper/helper.py
-${SYNOPKG_PKGDEST}/bin/TorrServer -d ${SYNOPKG_PKGVAR} -p ${TORRSERVER_PORT} ${TORRSERVER_FUSE_ARGS} ${TORRSERVER_SSL_ARGS} -l ${TORRSERVER_LOG}"
-fi
+    if [ -d "${SYNOPKG_PKGDEST}/ui" ]; then
+        update_firewall_port
+    fi
 
-SVC_BACKGROUND=y
-SVC_WRITE_PID=y
+    if [ -x "${CERTIFICATE_HELPER}" ]; then
+        if ! /bin/sudo -n "${CERTIFICATE_HELPER}" sync; then
+            echo "Warning: TLS certificate synchronization is unavailable. Configure DSM permissions if required."
+        fi
+    fi
+}
+
+# Files created by earlier package versions and no longer used.
+OBSOLETE_VAR_FILES="torrserver.fuse.path TorrServer_temp.log Helper.log.1"
+
+# Files holding package settings (not TorrServer's own database/torrents).
+SETTINGS_VAR_FILES="torrserver.port torrserver.auth accs.db torrserver.dir torrserver.fuse
+torrserver.https torrserver.https.port torrserver.force.https torrserver.ssl.mode
+torrserver.ssl.cert torrserver.ssl.key cache.path helper.language"
+
+remove_var_file()
+{
+    rm -f -- "${SYNOPKG_PKGVAR}/$1"
+}
+
+reset_settings()
+{
+    for f in ${SETTINGS_VAR_FILES}; do
+        remove_var_file "${f}"
+    done
+
+    # Certificates copied by certificate-helper; TorrServer will create its
+    # own self-signed pair again.
+    remove_var_file server.pem
+    remove_var_file server.key
+}
+
+migrate_config()
+{
+    if [ -z "${SYNOPKG_PKGVAR}" ] || [ ! -d "${SYNOPKG_PKGVAR}" ]; then
+        return 0
+    fi
+
+    if [ "${wizard_reset_settings}" = "true" ]; then
+        echo "Resetting package settings (requested in the upgrade wizard)"
+        reset_settings
+    fi
+
+    previous="$(cat "${SCHEMA_FILE}" 2>/dev/null)"
+    case "${previous}" in
+        ''|*[!0-9]*) previous=0 ;;
+    esac
+
+    if [ "${previous}" -lt "${CONFIG_SCHEMA}" ]; then
+        echo "Migrating configuration schema ${previous} -> ${CONFIG_SCHEMA}"
+
+        for f in ${OBSOLETE_VAR_FILES}; do
+            remove_var_file "${f}"
+        done
+
+        # Versions before schema 2 copied the DSM system certificate over
+        # server.pem/server.key regardless of the selected mode. Drop it so a
+        # "self" mode TorrServer uses its own certificate again.
+        mode="$(cat "${SYNOPKG_PKGVAR}/torrserver.ssl.mode" 2>/dev/null)"
+        case "${mode}" in
+            dsm|manual) ;;
+            *)
+                remove_var_file server.pem
+                remove_var_file server.key
+                ;;
+        esac
+
+        # A pid file surviving an upgrade is always stale (service is stopped).
+        remove_var_file "${SYNOPKG_PKGNAME}.pid"
+    fi
+
+    # Leftovers from interrupted writes or syno_sync_var_folder.
+    find "${SYNOPKG_PKGVAR}" -maxdepth 1 -type f \
+        \( -name '*.new' -o -name '*.tmp' -o -name '*.stage' \) -exec rm -f -- {} \; 2>/dev/null
+
+    printf '%s\n' "${CONFIG_SCHEMA}" > "${SCHEMA_FILE}"
+}
+
+service_postinst()
+{
+    printf '%s\n' "${CONFIG_SCHEMA}" > "${SCHEMA_FILE}"
+}
 
 service_preupgrade()
 {
     if [ -d "${SYNOPKG_PKGDEST}/config/" ] &&
        [ "$(ls -A "${SYNOPKG_PKGDEST}/config/" 2>/dev/null)" ]; then
         if [ -r "${SYNOPKG_PKGDEST}/config/${SYNOPKG_PKGNAME}.sc" ]; then
-            $RM "${SYNOPKG_PKGDEST}/config/${SYNOPKG_PKGNAME}.sc" | install_log
+            $RM "${SYNOPKG_PKGDEST}/config/${SYNOPKG_PKGNAME}.sc"
         fi
-        echo "Backup target/config folder" | install_log
-        echo "$RSYNC ${SYNOPKG_PKGDEST}/config/ ${TMP_DIR}" | install_log
-        $RSYNC "${SYNOPKG_PKGDEST}/config/" "${TMP_DIR}" 2>&1 | install_log
+        echo "Backup target/config folder"
+        $RSYNC "${SYNOPKG_PKGDEST}/config/" "${TMP_DIR}" 2>&1
     fi
 }
 
-
 service_postupgrade()
 {
-    /usr/syno/bin/synosystemctl reload nginx.service
+    migrate_config
+    return 0
 }
-

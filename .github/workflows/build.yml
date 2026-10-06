@@ -22,7 +22,9 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v5
         with:
-          fetch-depth: 2
+          # The previous commit of a multi-commit push can be arbitrarily
+          # far back, so the full history is needed to read the old Makefile.
+          fetch-depth: 0
 
       - name: Check PKG_VERSION change
         id: check

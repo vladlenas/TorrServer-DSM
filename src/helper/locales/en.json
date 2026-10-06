@@ -97,6 +97,6 @@
   "Normal library scanning can remain enabled. Background analysis and thumbnail generation may read large virtual files and cause significant CPU, network and storage load.": "Normal library scanning can remain enabled. Background analysis and thumbnail generation may read large virtual files and cause significant CPU, network and storage load.",
   "FUSE can be used as a media library source for Emby.": "FUSE can be used as a media library source for Emby.",
   "Background task behavior with TorrServer FUSE has not been tested in this version.": "Background task behavior with TorrServer FUSE has not been tested in this version.",
-  "Keep <b>Show only active torrents</b> disabled so Plex can see the library without starting torrents.": "Keep <b>Show only active torrents</b> disabled so Plex can see the library without starting torrents.",
-  "To avoid unnecessary reads of large virtual files, disable <b>Perform extensive file analysis during maintenance</b> and disable <b>video preview thumbnails</b> in Plex.": "To avoid unnecessary reads of large virtual files, disable <b>Perform extensive file analysis during maintenance</b> and disable <b>video preview thumbnails</b> in Plex."
+  "Keep <b>“Show only active torrents”</b> disabled so Plex can see the library without starting torrents.": "Keep <b>“Show only active torrents”</b> disabled so Plex can see the library without starting torrents.",
+  "To avoid unnecessary reads of large virtual files, disable <b>“Perform extensive file analysis during maintenance”</b> and <b>“video preview thumbnails”</b> in Plex.": "To avoid unnecessary reads of large virtual files, disable <b>“Perform extensive file analysis during maintenance”</b> and <b>“video preview thumbnails”</b> in Plex."
 }
