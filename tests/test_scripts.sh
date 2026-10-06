@@ -102,6 +102,12 @@ if [ "$(id -u)" -eq 0 ]; then RUN=""; elif sudo -n true 2>/dev/null; then RUN="s
 if [ "$RUN" = skip ]; then
     echo "SKIP (not root and no passwordless sudo)"
 else
+    $RUN sh "${SCRIPTS}/prepare-directory" >/dev/null 2>&1; rc=$?
+    check "no argument exits 64 (the Helper's permission probe relies on it)" [ "$rc" -eq 64 ]
+    $RUN sh "${SCRIPTS}/prepare-directory" a b >/dev/null 2>&1; rc=$?
+    check "wrong argument count also exits 64" [ "$rc" -eq 64 ]
+    $RUN sh "${SCRIPTS}/prepare-directory" "/etc" >/dev/null 2>&1; rc=$?
+    check "a rejected directory is NOT 64 (not mistaken for the probe)" [ "$rc" -eq 1 ]
     for bad in "/volume1/../etc/x" "/volume1" "/etc" "/volume1/a b" "/volume1/ok/.."; do
         check "rejects '$bad'"              sh -c "! $RUN sh '${SCRIPTS}/prepare-directory' '$bad' >/dev/null 2>&1"
     done

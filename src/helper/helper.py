@@ -746,11 +746,34 @@ _PRIVILEGE_CACHE = {"time": 0.0, "value": False}
 PRIVILEGE_CACHE_SECONDS = 10
 
 
-def has_privileged_access(use_cache=True):
-    """Return True when the package can run its root-only certificate helper.
+# Must match the exit code prepare-directory uses for "no directory given".
+PREPARE_USAGE_EXIT = 64
 
-    Each check spawns sudo and a ``find`` over the certificate store, so the
-    result is cached briefly (a page render asks several times).
+
+def sudo_denied(stderr):
+    """True when sudo itself refused (not the script it was asked to run).
+
+    Whatever the locale, sudo prefixes its own messages with "sudo:".
+    """
+    return "sudo:" in (stderr or "")
+
+
+PERMISSIONS_OUTDATED = (
+    "DSM permissions are missing or out of date. Run "
+    "/var/packages/TorrServer/scripts/setup-permissions as root in DSM Task "
+    "Scheduler (the permissions were extended in this version), then try again"
+)
+
+
+def has_privileged_access(use_cache=True):
+    """Return True when the package may run its root-only scripts.
+
+    Both scripts the Helper depends on are checked, because a sudoers rule
+    written by an older package version covers only some of them. Each check
+    spawns sudo, so the result is cached briefly (a page render asks several
+    times). prepare-directory is started without arguments, which makes it
+    print its usage text and do nothing; restart-package is not probed because
+    running it would restart the package.
     """
     now = time.monotonic()
 
@@ -759,15 +782,31 @@ def has_privileged_access(use_cache=True):
 
     value = False
 
-    if os.path.isfile(CERTIFICATE_HELPER):
+    if os.path.isfile(CERTIFICATE_HELPER) and os.path.isfile(PREPARE_DIRECTORY):
         try:
-            result = subprocess.run(
+            certificates = subprocess.run(
                 ["/bin/sudo", "-n", CERTIFICATE_HELPER],
+                stdin=subprocess.DEVNULL,
                 stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
+                stderr=subprocess.PIPE,
+                universal_newlines=True,
                 timeout=5,
             )
-            value = result.returncode == 0
+            directories = subprocess.run(
+                ["/bin/sudo", "-n", PREPARE_DIRECTORY],
+                stdin=subprocess.DEVNULL,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.PIPE,
+                universal_newlines=True,
+                timeout=5,
+            )
+            # sudo's own refusal exits with 1; prepare-directory without an
+            # argument exits with PREPARE_USAGE_EXIT. Warnings that sudo may
+            # print on stderr therefore cannot be mistaken for a refusal.
+            value = (
+                certificates.returncode == 0
+                and directories.returncode == PREPARE_USAGE_EXIT
+            )
         except Exception:
             value = False
 
@@ -897,7 +936,7 @@ def prepare_torrserver_directory(torrserver_dir):
         return False, "Directory preparation script not found"
 
     if not torrserver_dir:
-        return False, "TorrServer directory is required"
+        return False, "Choose the TorrServer directory with the Browse button"
 
     try:
         result = subprocess.run(
@@ -915,6 +954,9 @@ def prepare_torrserver_directory(torrserver_dir):
         )
 
         if result.returncode != 0:
+            if sudo_denied(result.stderr):
+                return False, PERMISSIONS_OUTDATED
+
             message = result.stderr.strip() or result.stdout.strip()
             return False, message or "Failed to prepare TorrServer directory"
 
@@ -1278,13 +1320,13 @@ def save_settings(params):
     # ---- 1. Validate everything first; nothing is changed until all pass.
 
     if not has_privileged_access():
-        return False, "Additional DSM permissions are required to save settings"
+        return False, PERMISSIONS_OUTDATED
 
     if ssl_mode not in (SSL_CERT_MODE_SELF, SSL_CERT_MODE_DSM, SSL_CERT_MODE_MANUAL):
         return False, "Invalid certificate mode"
 
     if not torrserver_dir:
-        return False, "TorrServer directory is required"
+        return False, "Choose the TorrServer directory with the Browse button"
 
     if len(torrserver_dir) > 1:
         torrserver_dir = torrserver_dir.rstrip("/")

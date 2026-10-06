@@ -231,12 +231,110 @@ class SaveSettingsTests(Base):
         self.assertTrue(self.save()[0])
         self.assertFalse(self.save(https="1")[0])
 
+    def test_missing_permissions_give_the_actionable_message(self):
+        h.has_privileged_access = lambda use_cache=True: False
+        ok, message = self.save()
+        self.assertFalse(ok)
+        self.assertIn("setup-permissions", message)
+        self.assertFalse(os.path.exists(h.PORT_FILE), "nothing may be written")
+
     def test_saves_when_torrserver_is_down(self):
         self.ts.close()
         h.get_port = lambda: free_port()
         ok, message = self.save()
         self.assertTrue(ok, message)
         self.assertEqual(h.read_file(h.CACHE_PENDING_FILE), "/volume1/TS/Cache")
+
+
+class PrivilegeTests(Base):
+    """The Helper must notice a sudoers rule that covers only some scripts."""
+
+    DENIED = "sudo: a password is required\n"
+    USAGE = 64   # prepare-directory's exit code for "no directory given"
+
+    def setUp(self):
+        super().setUp()
+        self.calls = []
+        self.real_run, self.real_isfile = h.subprocess.run, os.path.isfile
+        self.addCleanup(lambda: (setattr(h.subprocess, "run", self.real_run),
+                                 setattr(os.path, "isfile", self.real_isfile)))
+        os.path.isfile = lambda p: True
+
+    def fake_sudo(self, cert=(0, ""), prepare=(64, "")):
+        def run(cmd, **kwargs):
+            self.calls.append(cmd)
+            rc, err = cert if cmd[-1] == h.CERTIFICATE_HELPER else prepare
+            return type("R", (), {"returncode": rc, "stderr": err, "stdout": ""})()
+        h.subprocess.run = run
+
+    def test_exit_code_matches_the_script(self):
+        script = open(os.path.join(ROOT, "src", "scripts", "prepare-directory")).read()
+        self.assertEqual(h.PREPARE_USAGE_EXIT, self.USAGE)
+        self.assertIn("exit %d" % self.USAGE, script)
+
+    def test_fully_configured(self):
+        self.fake_sudo(cert=(0, ""), prepare=(self.USAGE, ""))
+        self.assertTrue(h.has_privileged_access(use_cache=False))
+
+    def test_old_rule_without_prepare_directory_is_detected(self):
+        """The reported case: certificate-helper is allowed, prepare-directory is not."""
+        self.fake_sudo(cert=(0, ""), prepare=(1, self.DENIED))
+        self.assertFalse(h.has_privileged_access(use_cache=False))
+
+    def test_no_rule_at_all(self):
+        self.fake_sudo(cert=(1, self.DENIED), prepare=(1, self.DENIED))
+        self.assertFalse(h.has_privileged_access(use_cache=False))
+
+    def test_certificate_helper_denied_only(self):
+        self.fake_sudo(cert=(1, "sudo: sorry, you are not allowed\n"), prepare=(self.USAGE, ""))
+        self.assertFalse(h.has_privileged_access(use_cache=False))
+
+    def test_harmless_sudo_warnings_do_not_lock_the_helper(self):
+        """sudo may print notices on stderr even when it runs the command."""
+        warning = "sudo: unable to resolve host SYNONAS\n"
+        self.fake_sudo(cert=(0, warning), prepare=(self.USAGE, warning))
+        self.assertTrue(h.has_privileged_access(use_cache=False))
+
+    def test_localized_refusal_is_still_a_refusal(self):
+        self.fake_sudo(cert=(0, ""), prepare=(1, "sudo: требуется пароль\n"))
+        self.assertFalse(h.has_privileged_access(use_cache=False))
+
+    def test_unexpected_exit_code_is_not_trusted(self):
+        self.fake_sudo(cert=(0, ""), prepare=(1, ""))      # e.g. an old script version
+        self.assertFalse(h.has_privileged_access(use_cache=False))
+        self.fake_sudo(cert=(0, ""), prepare=(0, ""))
+        self.assertFalse(h.has_privileged_access(use_cache=False))
+
+    def test_restart_script_is_never_started_by_the_check(self):
+        self.fake_sudo()
+        h.has_privileged_access(use_cache=False)
+        self.assertTrue(all(h.RESTART_SCRIPT not in cmd for cmd in self.calls))
+        self.assertTrue(all("-n" in cmd for cmd in self.calls), "sudo must never prompt")
+
+    def test_result_is_cached(self):
+        self.fake_sudo()
+        h._PRIVILEGE_CACHE["time"] = 0.0
+        h.has_privileged_access()
+        count = len(self.calls)
+        h.has_privileged_access()
+        self.assertEqual(len(self.calls), count)
+
+    def test_raw_sudo_error_becomes_actionable_message(self):
+        self.fake_sudo(prepare=(1, self.DENIED))
+        ok, message = h.prepare_torrserver_directory("/volume1/TS")
+        self.assertFalse(ok)
+        self.assertNotIn("a password is required", message)
+        self.assertIn("setup-permissions", message)
+
+    def test_real_script_errors_are_passed_through(self):
+        self.fake_sudo(prepare=(1, "Invalid TorrServer directory.\n"))
+        self.assertEqual(h.prepare_torrserver_directory("/etc"), (False, "Invalid TorrServer directory."))
+
+    def test_empty_directory_tells_the_user_what_to_do(self):
+        self.fake_sudo()
+        ok, message = h.prepare_torrserver_directory("")
+        self.assertFalse(ok)
+        self.assertIn("Browse", message)
 
 
 class LogRotationTests(Base):

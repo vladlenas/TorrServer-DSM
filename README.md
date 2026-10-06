@@ -111,7 +111,12 @@ Settings are kept across upgrades. On every upgrade the package removes
 leftovers from older versions (obsolete files, `*.new` / `*.tmp` files and, for
 the self-signed certificate mode, a stale `server.pem` / `server.key`). To
 start from defaults, tick **Reset package settings to defaults** in the upgrade
-wizard. Torrents and TorrServer's own database are not touched by the reset.
+wizard.
+
+The sudo rule is written once and is **not** refreshed by an upgrade. If you
+upgrade from a version older than the one that introduced `prepare-directory`,
+run `setup-permissions` again (see *DSM permissions*); until then the Helper
+reports that permissions are out of date. Torrents and TorrServer's own database are not touched by the reset.
 
 ## TorrServer Version
 
