@@ -40,6 +40,9 @@ TorrServer itself is unchanged (`MatriX.145.2`).
   is applied automatically when TorrServer is not running at the moment.
 - The service output now goes to `service.log`; `TorrServer.log` is no longer
   truncated on every start. Both logs are rotated.
+- Removed code and files left over from older versions that the package no
+  longer needs (DSM 6 handling, an unused `cache.path` file, unused dashboard
+  code). Obsolete files are cleaned up on upgrade.
 
 ### Fixed
 
@@ -48,6 +51,12 @@ TorrServer itself is unchanged (`MatriX.145.2`).
   the upgrade wizard.
 - Translations could change form values, paths, JavaScript names and the logo
   image; only visible text is translated now.
+- Error messages were partly in English in the other languages (for example
+  "Веб-порт 42777 is reserved ..."). All messages and the access-denied page
+  are now translated completely, and the instructions name DSM's screens the
+  way DSM itself does: Russian «Планировщик задач» instead of «Диспетчер
+  задач», Polish „Harmonogram zadań"; for Ukrainian and Lithuanian, which DSM
+  does not offer, DSM's English names are kept.
 - Checking the HTTPS port no longer blocks saving when HTTPS is off; user names
   containing `:` are rejected; folders containing spaces are rejected (they
   broke the FUSE option).
@@ -67,3 +76,9 @@ TorrServer itself is unchanged (`MatriX.145.2`).
   an older version and want the optional features, run `setup-permissions`
   again from DSM Task Scheduler.
 - The Helper needs a DSM administrator account.
+- **HTTPS in the self-signed mode:** an older version copied the DSM certificate
+  over TorrServer's own `server.pem` / `server.key`. The upgrade removes that
+  copy, so TorrServer generates its own self-signed certificate again and
+  clients may show a certificate warning once. To keep using the DSM
+  certificate, choose **DSM certificate** in the Helper (this needs the optional
+  permissions).

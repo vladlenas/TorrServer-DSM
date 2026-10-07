@@ -77,7 +77,7 @@ the rule is not removed on uninstall. Remove it with:
 ## Upgrading
 
 Settings are kept across upgrades. On every upgrade the package removes
-leftovers from older versions (obsolete files, `*.new` / `*.tmp` files and, for
+leftovers from older versions (obsolete files, `*.tmp` files and, for
 the self-signed certificate mode, a stale `server.pem` / `server.key`). To
 start from defaults, tick **Reset package settings to defaults** in the upgrade
 wizard. Torrents and TorrServer's own database are not touched by the reset.
@@ -144,6 +144,12 @@ The TorrServer version used by the package and the package version are defined
 in `Makefile` (`TORRSERVER_VERSION`, `PKG_VERSION`). Downloaded binaries are
 cached per TorrServer version in `dest_bin/`.
 
+`PKG_VERSION` is `<package version>.<TorrServer build>`. For example
+`2.3.145.2` is version `2.3` of this package shipping TorrServer build
+`145.2` (`TORRSERVER_VERSION := MatriX.145.2`). Raise the package part
+(`2.3`) for every release of the package; the TorrServer part (`145.2`) changes
+only together with `TORRSERVER_VERSION`. A test checks that the two agree.
+
 To publish a release:
 
 1. Bump `PKG_VERSION` in `Makefile`.
@@ -166,6 +172,25 @@ From then on a build refuses a download whose SHA-256 differs, and CI refuses
 downloads that are not pinned. Pins are keyed by version, so run
 `make checksums` again after changing `TORRSERVER_VERSION` (delete `dest_bin`
 first if the binaries are already cached).
+
+### Translations
+
+The Helper's texts live in `src/helper/locales/<language>.json`; the English
+text is the key. Tests enforce these rules:
+
+- **Names of DSM's own screens follow DSM.** DSM ships Russian and Polish, so
+  those two use DSM's official wording (for example Russian «Планировщик
+  задач», Polish „Harmonogram zadań"). DSM has no Ukrainian or Lithuanian
+  interface, so there the names stay in English exactly as DSM shows them
+  (Control Panel → Task Scheduler …).
+- **Every message the code can show has a translation** in all four languages.
+  Messages are translated as whole sentences, so a value goes last
+  (`Web port is already in use: 8090`) and a message contains no quotes.
+- Messages name this package's own buttons and pages exactly as the interface
+  does (for example the translated "Browse" button).
+
+When you add or change a message, update all five files; the tests list what
+is missing.
 
 ### Tests
 

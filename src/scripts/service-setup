@@ -11,10 +11,10 @@ fi
 # side effects belongs in a service_* function below.
 
 # Bump when the layout of ${SYNOPKG_PKGVAR} changes; migrate_config() uses it.
-CONFIG_SCHEMA=2
-
-USER="TorrServer"
-EFF_USER="TorrServer"
+# History: 2 = first migration (but postinst recorded it before the migration
+# ran, so upgrades skipped the cleanup); 3 = the migration really runs, and
+# also repairs installations that were marked 2 without being cleaned.
+CONFIG_SCHEMA=3
 
 CONFIG_DIR="${SYNOPKG_PKGVAR:-/var/packages/${SYNOPKG_PKGNAME}/var}"
 # Stdout/stderr of the service itself. Must not be the same file as TorrServer's
@@ -88,9 +88,6 @@ fi
 SERVICE_COMMAND="/bin/python3 ${SYNOPKG_PKGDEST}/helper/helper.py
 ${SYNOPKG_PKGDEST}/bin/TorrServer -d ${SYNOPKG_PKGVAR} -p ${TORRSERVER_PORT} ${AUTH_ARGS} ${SSL_ARGS} ${FUSE_ARGS} -l ${TORRSERVER_LOG}"
 
-SVC_BACKGROUND=y
-SVC_WRITE_PID=y
-
 update_firewall_port()
 {
     sc_file="${SYNOPKG_PKGDEST}/ui/TorrServer.sc"
@@ -135,12 +132,12 @@ service_prestart()
 }
 
 # Files created by earlier package versions and no longer used.
-OBSOLETE_VAR_FILES="torrserver.fuse.path TorrServer_temp.log Helper.log.1"
+OBSOLETE_VAR_FILES="torrserver.fuse.path cache.path"
 
 # Files holding package settings (not TorrServer's own database/torrents).
 SETTINGS_VAR_FILES="torrserver.port torrserver.auth accs.db torrserver.dir torrserver.fuse
 torrserver.https torrserver.https.port torrserver.force.https torrserver.ssl.mode
-torrserver.ssl.cert torrserver.ssl.key cache.path cache.pending helper.language"
+torrserver.ssl.cert torrserver.ssl.key cache.pending helper.language"
 
 remove_var_file()
 {
@@ -198,28 +195,20 @@ migrate_config()
         remove_var_file "${SYNOPKG_PKGNAME}.pid"
     fi
 
-    # Leftovers from interrupted writes or syno_sync_var_folder.
+    # Leftovers from interrupted writes.
     find "${SYNOPKG_PKGVAR}" -maxdepth 1 -type f \
-        \( -name '*.new' -o -name '*.tmp' -o -name '*.stage' \) -exec rm -f -- {} \; 2>/dev/null
+        \( -name '*.tmp' -o -name '*.stage' \) -exec rm -f -- {} \; 2>/dev/null
 
     printf '%s\n' "${CONFIG_SCHEMA}" > "${SCHEMA_FILE}"
 }
 
 service_postinst()
 {
-    printf '%s\n' "${CONFIG_SCHEMA}" > "${SCHEMA_FILE}"
-}
-
-service_preupgrade()
-{
-    if [ -d "${SYNOPKG_PKGDEST}/config/" ] &&
-       [ "$(ls -A "${SYNOPKG_PKGDEST}/config/" 2>/dev/null)" ]; then
-        if [ -r "${SYNOPKG_PKGDEST}/config/${SYNOPKG_PKGNAME}.sc" ]; then
-            $RM "${SYNOPKG_PKGDEST}/config/${SYNOPKG_PKGNAME}.sc"
-        fi
-        echo "Backup target/config folder"
-        $RSYNC "${SYNOPKG_PKGDEST}/config/" "${TMP_DIR}" 2>&1
-    fi
+    # DSM runs postinst for installs AND for upgrades, and it runs it BEFORE
+    # postupgrade. Recording the schema here (as an earlier version did) made
+    # the migration in postupgrade believe there was nothing to do. So the
+    # migration itself runs here; migrate_config records the schema last.
+    migrate_config
 }
 
 service_postupgrade()

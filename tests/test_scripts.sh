@@ -19,7 +19,7 @@ hasnt(){ [ ! -e "$VAR/$1" ]; }
 setup_var() { # setup_var <ssl mode>
     rm -rf "$TMP/var" "$TMP/target"
     VAR="$TMP/var"; mkdir -p "$VAR" "$TMP/target/ui"
-    for f in torrserver.fuse.path server.pem server.key a.new b.tmp c.stage TorrServer.pid accs.db; do echo x > "$VAR/$f"; done
+    for f in torrserver.fuse.path server.pem server.key b.tmp c.stage TorrServer.pid accs.db; do echo x > "$VAR/$f"; done
     echo 9999 > "$VAR/torrserver.port"
     echo "$1" > "$VAR/torrserver.ssl.mode"
 }
@@ -37,10 +37,11 @@ check "settings kept"                       has torrserver.port
 check "port still 9999"                     [ "$(cat "$VAR/torrserver.port")" = 9999 ]
 check "accounts kept"                       has accs.db
 check "obsolete torrserver.fuse.path gone"  hasnt torrserver.fuse.path
-check "leftover *.new/*.tmp/*.stage gone"   sh -c "[ ! -e '$VAR/a.new' ] && [ ! -e '$VAR/b.tmp' ] && [ ! -e '$VAR/c.stage' ]"
+check "leftover *.tmp/*.stage gone"         sh -c "[ ! -e '$VAR/b.tmp' ] && [ ! -e '$VAR/c.stage' ]"
 check "stale server.pem/key gone (self)"    sh -c "[ ! -e '$VAR/server.pem' ] && [ ! -e '$VAR/server.key' ]"
 check "stale pid file gone"                 hasnt TorrServer.pid
-check "schema recorded"                     [ "$(cat "$VAR/config.schema")" = 2 ]
+SCHEMA="$(run_setup 'echo "$CONFIG_SCHEMA"')"
+check "schema recorded"                     [ "$(cat "$VAR/config.schema")" = "$SCHEMA" ]
 
 setup_var dsm
 run_setup migrate_config >/dev/null
@@ -59,6 +60,156 @@ check "accounts removed"                    hasnt accs.db
 check "pending cache removed"               hasnt cache.pending
 check "certificates removed"                sh -c "[ ! -e '$VAR/server.pem' ]"
 check "schema recorded after reset"         has config.schema
+
+echo "== DSM upgrade sequence: the real postinst, then the real postupgrade"
+mkdir -p "$TMP/stubbin"; printf '#!/bin/sh\nexit 0\n' > "$TMP/stubbin/chown"; chmod +x "$TMP/stubbin/chown"
+
+dsm_prepare() {   # state left by the PREVIOUS release (it has no config.schema)
+    D="$TMP/dsm"; rm -rf "$D"; mkdir -p "$D/var" "$D/target" "$D/tmpup" "$D/home"; VAR="$D/var"
+}
+dsm_old_state() { # dsm_old_state <ssl mode>
+    echo 9999 > "$VAR/torrserver.port"; echo '{"u":"p"}' > "$VAR/accs.db"; echo x > "$VAR/torrserver.fuse.path"; echo /volume1/x > "$VAR/cache.path"
+    echo "$1" > "$VAR/torrserver.ssl.mode"; echo OLD-DSM-CERT > "$VAR/server.pem"; echo OLD-DSM-KEY > "$VAR/server.key"
+    echo x > "$VAR/leftover.tmp"
+}
+dsm_steps() {     # dsm_steps [reset] <step>...    (DSM calls postinst first, then postupgrade)
+    reset=""; [ "$1" = reset ] && { reset=1; shift; }
+    for step in "$@"; do
+        ( cd "$D" && env PATH="$TMP/stubbin:$PATH" SYNOPKG_PKGNAME=TorrServer SYNOPKG_DSM_VERSION_MAJOR=7 \
+            SYNOPKG_PKGVAR="$VAR" SYNOPKG_PKGDEST="$D/target" SYNOPKG_TEMP_UPGRADE_FOLDER="$D/tmpup" \
+            SYNOPKG_TEMP_LOGFILE="$D/log.txt" SYNOPKG_PKGHOME="$D/home" ${reset:+wizard_reset_settings=true} \
+            sh "${SCRIPTS}/$step" >/dev/null 2>&1 )
+    done
+}
+EXPECTED="$(sh -c ". '${SCRIPTS}/service-setup' 2>/dev/null; echo \$CONFIG_SCHEMA" 2>/dev/null || true)"
+
+dsm_prepare; dsm_old_state self; dsm_steps postinst postupgrade
+check "upgrade: obsolete torrserver.fuse.path removed"      hasnt torrserver.fuse.path
+check "upgrade: obsolete cache.path removed"                hasnt cache.path
+check "upgrade: stale DSM certificate removed (self mode)"  sh -c "[ ! -e '$VAR/server.pem' ] && [ ! -e '$VAR/server.key' ]"
+check "upgrade: leftover *.tmp removed"                     hasnt leftover.tmp
+check "upgrade: settings are kept"                          sh -c "[ \"\$(cat '$VAR/torrserver.port')\" = 9999 ] && [ -e '$VAR/accs.db' ]"
+check "upgrade: default files created by postinst exist"    sh -c "[ -e '$VAR/torrserver.fuse' ] && [ -e '$VAR/torrserver.dir' ]"
+check "upgrade: schema recorded at the end"                 [ "$(cat "$VAR/config.schema")" = "$SCHEMA" ]
+
+dsm_prepare; dsm_old_state dsm; dsm_steps postinst postupgrade
+check "upgrade (dsm cert mode): the certificate is kept"    sh -c "[ -e '$VAR/server.pem' ] && [ -e '$VAR/server.key' ]"
+check "upgrade (dsm cert mode): obsolete file still removed" hasnt torrserver.fuse.path
+
+dsm_prepare; dsm_old_state self; dsm_steps reset postinst postupgrade
+check "upgrade + reset: package settings removed"           sh -c "[ ! -e '$VAR/torrserver.port' ] && [ ! -e '$VAR/accs.db' ] && [ ! -e '$VAR/torrserver.dir' ]"
+check "upgrade + reset: obsolete file removed too"          hasnt torrserver.fuse.path
+check "upgrade + reset: schema recorded"                    [ "$(cat "$VAR/config.schema")" = "$SCHEMA" ]
+
+dsm_prepare; dsm_old_state self; echo 2 > "$VAR/config.schema"      # the broken earlier build marked it 2 without cleaning
+dsm_steps postinst postupgrade
+check "repair: an installation marked by the broken build is cleaned" sh -c "[ ! -e '$VAR/torrserver.fuse.path' ] && [ ! -e '$VAR/server.pem' ]"
+
+dsm_prepare; dsm_old_state self; dsm_steps postinst postupgrade
+echo "TORRSERVER-OWN-CERT" > "$VAR/server.pem"; echo "TORRSERVER-OWN-KEY" > "$VAR/server.key"    # TorrServer generated its own
+dsm_steps postinst postupgrade                                                                  # the NEXT upgrade
+check "next upgrade: TorrServer's own certificate is NOT deleted" sh -c "[ \"\$(cat '$VAR/server.pem')\" = TORRSERVER-OWN-CERT ] && [ -e '$VAR/server.key' ]"
+
+dsm_prepare; dsm_steps postinst            # fresh install: empty var, postinst only
+check "fresh install: schema recorded"                      [ "$(cat "$VAR/config.schema")" = "$SCHEMA" ]
+check "fresh install: default files created"                sh -c "[ -e '$VAR/torrserver.fuse' ] && [ -e '$VAR/torrserver.dir' ]"
+listing="$(LC_ALL=C ls "$VAR" | tr '\n' ' ')"
+check "fresh install: only the expected files appear"       [ "$listing" = "config.schema service.log torrserver.dir torrserver.fuse " ]
+
+echo "== service lifecycle: the real start-stop-status (run with bash, which is what DSM's sh is)"
+if [ -x /bin/python3 ] && command -v bash >/dev/null 2>&1; then
+    S="$TMP/svc"; rm -rf "$S"; mkdir -p "$S/scripts" "$S/var" "$S/target/bin" "$S/target/helper" "$S/target/ui"
+    cp "${SCRIPTS}/start-stop-status" "${SCRIPTS}/service-setup" "$S/scripts/"
+    # Stand-ins: a "TorrServer" that records its arguments, and a helper that only waits.
+    cat > "$S/target/bin/TorrServer" <<'FAKE'
+#!/bin/sh
+printf '%s\n' "$@" > "$FAKE_ARGS_FILE"
+exec sleep 300
+FAKE
+    printf 'import time\ntime.sleep(300)\n' > "$S/target/helper/helper.py"
+    chmod +x "$S/target/bin/TorrServer"
+    ssc() { # ssc <action>
+        env FAKE_ARGS_FILE="$S/args.txt" SYNOPKG_PKGNAME=TorrServer SYNOPKG_DSM_VERSION_MAJOR=7 \
+            SYNOPKG_PKGDEST="$S/target" SYNOPKG_PKGVAR="$S/var" bash "$S/scripts/start-stop-status" "$1"
+    }
+    # A killed process whose parent has not reaped it yet is a zombie: kill -0
+    # still succeeds on it, so look at the process state as well.
+    alive() { kill -0 "$1" 2>/dev/null && [ "$(ps -o stat= -p "$1" 2>/dev/null | cut -c1)" != "Z" ]; }
+    gone() { # gone <pid>  (allow a few seconds for the process table to settle)
+        n=0; while alive "$1" && [ "$n" -lt 8 ]; do sleep 1; n=$((n + 1)); done; ! alive "$1"; }
+    all_alive() { for p in "$@"; do alive "$p" || return 1; done; }
+    all_gone() { for p in "$@"; do gone "$p" || return 1; done; }
+    cleanup_svc() { for p in $(cat "$S/var/TorrServer.pid" 2>/dev/null); do kill -9 "$p" 2>/dev/null; done; }
+    trap 'cleanup_svc; rm -rf "$TMP"' EXIT
+
+    ssc status >/dev/null; rc=$?
+    check "not started yet: status exits 3"                  [ "$rc" -eq 3 ]
+
+    ssc start; rc=$?
+    check "start exits 0"                                    [ "$rc" -eq 0 ]
+    PIDS="$(cat "$S/var/TorrServer.pid" 2>/dev/null)"
+    set -- $PIDS; HELPER_PID="$1"; TS_PID="$2"
+    check "pid file lists exactly two processes"             [ "$#" -eq 2 ]
+    check "both processes are running"                       all_alive "$HELPER_PID" "$TS_PID"
+    sleep 1
+    check "TorrServer got -d <var directory>"                grep -qx -- "$S/var" "$S/args.txt"
+    check "TorrServer got the default port 8090"             sh -c "grep -A1 -x -- '-p' '$S/args.txt' | grep -qx 8090"
+    check "TorrServer got its own log file (-l)"             sh -c "grep -A1 -x -- '-l' '$S/args.txt' | grep -qx '$S/var/TorrServer.log'"
+    check "the service log gets a start header"              grep -q "Starting TorrServer" "$S/var/service.log"
+    check "service_prestart ran: firewall file written"      grep -q 'dst.ports="8090/tcp"' "$S/target/ui/TorrServer.sc"
+
+    out="$(ssc status)"; rc=$?
+    check "status exits 0 while running"                     [ "$rc" -eq 0 ]
+    check "status says it is running"                        sh -c "echo '$out' | grep -q 'is running'"
+
+    ssc start; rc=$?
+    check "a second start is harmless (exit 0)"              [ "$rc" -eq 0 ]
+    check "...and does not change the pids"                  [ "$(cat "$S/var/TorrServer.pid")" = "$PIDS" ]
+    check "...it only says that it is already running"       grep -q "already running" "$S/var/service.log"
+
+    ssc stop; rc=$?
+    check "stop exits 0"                                     [ "$rc" -eq 0 ]
+    check "both processes are gone"                          all_gone "$HELPER_PID" "$TS_PID"
+    check "pid file removed"                                 sh -c "[ ! -e '$S/var/TorrServer.pid' ]"
+    ssc status >/dev/null; rc=$?
+    check "after stop: status exits 3"                       [ "$rc" -eq 3 ]
+    ssc stop; rc=$?
+    check "stopping a stopped service is harmless (exit 0)"  [ "$rc" -eq 0 ]
+
+    echo 999999 > "$S/var/TorrServer.pid"                    # a pid that does not exist
+    ssc status >/dev/null; rc=$?
+    check "a stale pid file means not running (exit 3)"      [ "$rc" -eq 3 ]
+    check "...and the stale file is removed"                 sh -c "[ ! -e '$S/var/TorrServer.pid' ]"
+
+    echo 9999 > "$S/var/torrserver.port"
+    ssc start >/dev/null; sleep 1
+    check "a saved port is used on the next start"           sh -c "grep -A1 -x -- '-p' '$S/args.txt' | grep -qx 9999"
+    check "...and appears in the firewall file"              grep -q 'dst.ports="9999/tcp"' "$S/target/ui/TorrServer.sc"
+    ssc stop >/dev/null; sleep 1
+
+    # A service that ignores SIGTERM must still be stopped (SIGKILL after the timeout).
+    cat > "$S/target/bin/TorrServer" <<'STUBBORN'
+#!/bin/sh
+trap '' TERM
+while true; do sleep 1; done
+STUBBORN
+    ssc start >/dev/null; sleep 1
+    set -- $(cat "$S/var/TorrServer.pid"); STUBBORN_PID="$2"
+    check "the stubborn service is running"                  alive "$STUBBORN_PID"
+    env SVC_WAIT_TIMEOUT=2 FAKE_ARGS_FILE="$S/args.txt" SYNOPKG_PKGNAME=TorrServer SYNOPKG_DSM_VERSION_MAJOR=7 \
+        SYNOPKG_PKGDEST="$S/target" SYNOPKG_PKGVAR="$S/var" bash "$S/scripts/start-stop-status" stop; rc=$?
+    sleep 1
+    check "stop exits 0 even when SIGTERM is ignored"        [ "$rc" -eq 0 ]
+    check "...the service was killed"                        gone "$STUBBORN_PID"
+    check "...and the pid file is gone"                      sh -c "[ ! -e '$S/var/TorrServer.pid' ]"
+    check "...the log says a KILL was needed"                sh -c "grep -q 'Stopping TorrServer service' '$S/var/service.log'"
+
+    ssc bogus >/dev/null 2>&1; rc=$?
+    check "an unknown action exits 1"                        [ "$rc" -eq 1 ]
+    cleanup_svc
+else
+    echo "SKIP (needs /bin/python3 and bash)"
+fi
 
 echo "== service-setup: sourcing has no side effects (status polls)"
 setup_var self; rm -f "$VAR/config.schema"
