@@ -3,7 +3,7 @@
 The top entry is used as the GitHub release notes; keep its version equal to
 `PKG_VERSION` in `Makefile`.
 
-## 2.2.145.2 (2026-10-06)
+## 2.3.145.2 (2026-10-07)
 
 TorrServer itself is unchanged (`MatriX.145.2`).
 
