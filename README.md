@@ -155,7 +155,12 @@ To publish a release:
 1. Bump `PKG_VERSION` in `Makefile`.
 2. Add a section for that version at the **top** of `CHANGELOG.md`
    (`## <version> (<date>)`). Its text becomes the release notes.
-3. Merge to `main`. CI runs the tests, builds the `.spk` files for all
+3. Pin the downloads (see *Checksums*) and commit.
+4. Run `sh .github/scripts/release-check.sh`. It refuses a version that is not
+   newer than the latest release, a tag that already exists (also on GitHub),
+   a changelog that does not match, downloads that are not pinned, uncommitted
+   changes and failing tests.
+5. Merge to `main`. CI runs the tests, builds the `.spk` files for all
    architectures and publishes the GitHub release `v<version>`.
 
 A test fails if the top `CHANGELOG.md` entry does not match `PKG_VERSION`.

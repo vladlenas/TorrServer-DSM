@@ -307,5 +307,84 @@ check "missing file -> exit 1"                   sh -c "! sh '$NOTES' 2.0.2 '$TM
 check "missing version argument -> exit 1"       sh -c "! sh '$NOTES' '' '$TMP/CHANGELOG.md' >/dev/null"
 check "the real CHANGELOG has an entry for itself" sh -c "v=\$(grep -m1 '^## ' '${ROOT}/CHANGELOG.md' | awk '{print \$2}'); sh '$NOTES' \"\$v\" '${ROOT}/CHANGELOG.md' >/dev/null"
 
+echo "== release-check.sh (pre-flight check before a release)"
+if command -v git >/dev/null 2>&1; then
+    CHECK="${ROOT}/.github/scripts/release-check.sh"
+    newrepo() { # a throw-away repository that is ready to release version 2.3.145.2, with an origin
+        R="$TMP/rel"; O="$TMP/origin.git"; rm -rf "$R" "$O"
+        git init -q --bare "$O"
+        mkdir -p "$R/.github/scripts"; cp "${ROOT}/.github/scripts/release-notes.sh" "$R/.github/scripts/"
+        cp "${ROOT}/build-package.sh" "$R/"
+        printf 'TORRSERVER_VERSION := MatriX.145.2\nPKG_VERSION := 2.3.145.2\n\nARCHES := amd64 arm64 arm7\n' > "$R/Makefile"
+        printf '# Changelog\n\n## 2.3.145.2 (2026-10-07)\n\nFixes.\n\n## 2.2.145.2 (2026-10-06)\n\nOlder.\n' > "$R/CHANGELOG.md"
+        : > "$R/checksums.sha256"
+        ( cd "$R" && git init -q -b main && git config user.email t@t && git config user.name t && git add -A \
+          && git commit -qm init && git tag v2.2.145.2 && git checkout -qb release && git remote add origin "$O" \
+          && git push -q origin --all && git push -q origin --tags ) 2>/dev/null
+    }
+    pins() { # all six pins the build needs
+        for k in TorrServer-MatriX.145.2-linux-amd64 TorrServer-MatriX.145.2-linux-arm64 TorrServer-MatriX.145.2-linux-arm7 \
+                 ffprobe-6.1-linux-64.zip ffprobe-6.1-linux-arm-64.zip ffprobe-6.1-linux-armhf-32.zip; do
+            printf '%064d  %s\n' 1 "$k"; done > "$R/checksums.sha256"
+    }
+    commit_all() { ( cd "$R" && git add -A && git commit -qm change ) >/dev/null 2>&1; }
+    rc_check() { ( cd "$R" && RELEASE_CHECK_SKIP_TESTS=1 sh "$CHECK" ) > "$TMP/rc.out" 2>&1; echo $?; }
+
+    newrepo; pins; commit_all
+    check "a repository that is ready passes"               [ "$(rc_check)" = 0 ]
+    check "...and says READY"                               grep -q "READY to release v2.3.145.2" "$TMP/rc.out"
+    check "...with no warning when every download is pinned" grep -q "(1 warning(s))" "$TMP/rc.out"   # only 'tests skipped'
+
+    newrepo; pins; commit_all; echo x > "$R/stray.txt"
+    check "uncommitted changes are refused"                 [ "$(rc_check)" = 1 ]
+    check "...and named"                                    grep -q "FAIL  uncommitted changes" "$TMP/rc.out"
+
+    newrepo; pins; sed -i 's/^PKG_VERSION := .*/PKG_VERSION := 2.2.145.2/' "$R/Makefile"; sed -i 's/^## 2.3.145.2/## 2.2.145.2/' "$R/CHANGELOG.md"; commit_all
+    check "a version that is already tagged is refused"     [ "$(rc_check)" = 1 ]
+    check "...it says the tag exists"                       grep -q "tag v2.2.145.2 already exists" "$TMP/rc.out"
+    check "...and does not call that version newer"         sh -c "! grep -q 'is newer than the latest release' '$TMP/rc.out'"
+
+    newrepo; pins; sed -i 's/^PKG_VERSION := .*/PKG_VERSION := 2.1.145.2/' "$R/Makefile"; sed -i 's/^## 2.3.145.2/## 2.1.145.2/' "$R/CHANGELOG.md"; commit_all
+    check "a version older than the latest release is refused" [ "$(rc_check)" = 1 ]
+    check "...it says it is not newer"                      grep -q "is not newer than the latest release 2.2.145.2" "$TMP/rc.out"
+
+    newrepo; pins; ( cd "$R" && git tag v2.3.145.2 && git push -q origin --tags ) 2>/dev/null; ( cd "$R" && git tag -d v2.3.145.2 ) >/dev/null 2>&1
+    check "a tag that exists only on GitHub is refused"     [ "$(rc_check)" = 1 ]
+    check "...it says the tag exists"                       grep -q "tag v2.3.145.2 already exists" "$TMP/rc.out"
+
+    newrepo; pins; sed -i 's/^PKG_VERSION := .*/PKG_VERSION := 2.3.145.3/' "$R/Makefile"; sed -i 's/^## 2.3.145.2/## 2.3.145.3/' "$R/CHANGELOG.md"; commit_all
+    check "a version that does not end with the TorrServer build is refused" [ "$(rc_check)" = 1 ]
+    check "...it explains the format"                       grep -q "must be <your version>.145.2" "$TMP/rc.out"
+
+    newrepo; pins; sed -i 's/^## 2.3.145.2/## 2.2.9.9/' "$R/CHANGELOG.md"; commit_all
+    check "a CHANGELOG that does not start with this version is refused" [ "$(rc_check)" = 1 ]
+
+    newrepo; pins; printf '# Changelog\n\n## 2.4.145.2 (2026-10-08)\n\nNewer text.\n\n## 2.3.145.2 (2026-10-07)\n\nFixes.\n' > "$R/CHANGELOG.md"; commit_all
+    check "an entry for this version below a different top entry is refused" [ "$(rc_check)" = 1 ]
+    check "...it names the entry on top"                    grep -q "top CHANGELOG.md entry is '2.4.145.2'" "$TMP/rc.out"
+
+    newrepo; pins; printf '# Changelog\n\n## 2.3.145.2 (2026-10-07)\n\n## 2.2.145.2 (2026-10-06)\n\nOlder.\n' > "$R/CHANGELOG.md"; commit_all
+    check "an empty release entry is refused"               [ "$(rc_check)" = 1 ]
+
+    newrepo; pins; grep -v "ffprobe-6.1-linux-64.zip" "$R/checksums.sha256" > "$R/c" && mv "$R/c" "$R/checksums.sha256"; commit_all
+    check "a half-pinned checksums file is refused (CI would fail the build)" [ "$(rc_check)" = 1 ]
+    check "...it names the missing download"                grep -q "missing: ffprobe-6.1-linux-64.zip" "$TMP/rc.out"
+
+    newrepo; pins; grep -v "linux-arm7" "$R/checksums.sha256" > "$R/c" && mv "$R/c" "$R/checksums.sha256"; commit_all
+    rc_check >/dev/null
+    check "a missing TorrServer pin is refused too"         grep -q "missing: TorrServer-MatriX.145.2-linux-arm7" "$TMP/rc.out"
+
+    newrepo; commit_all
+    check "no pins at all is only a warning"                [ "$(rc_check)" = 0 ]
+    check "...and the warning says what to run"             grep -q "make checksums" "$TMP/rc.out"
+
+    newrepo; pins; commit_all; ( cd "$R" && git checkout -q main ) >/dev/null 2>&1
+    rc_check >/dev/null
+    check "being on the main branch is a warning, not an error" grep -q "warn  you are on main" "$TMP/rc.out"
+    check "...and it does not make the check fail"          [ "$(rc_check)" = 0 ]
+else
+    echo "SKIP (git is not installed)"
+fi
+
 echo
 if [ "$FAILED" -eq 0 ]; then echo "ALL PASSED"; else echo "FAILED: $FAILED"; exit 1; fi

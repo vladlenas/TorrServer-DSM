@@ -76,9 +76,18 @@ TorrServer itself is unchanged (`MatriX.145.2`).
   an older version and want the optional features, run `setup-permissions`
   again from DSM Task Scheduler.
 - The Helper needs a DSM administrator account.
+- If you installed 2.2.145.2: its upgrade did not clean up leftovers of older
+  versions (old files stayed behind). Upgrading to this release repairs that
+  automatically.
 - **HTTPS in the self-signed mode:** an older version copied the DSM certificate
   over TorrServer's own `server.pem` / `server.key`. The upgrade removes that
   copy, so TorrServer generates its own self-signed certificate again and
   clients may show a certificate warning once. To keep using the DSM
   certificate, choose **DSM certificate** in the Helper (this needs the optional
   permissions).
+
+## 2.2.145.2 (2026-10-06)
+
+Replaced by the release above. The clean-up of leftovers during an upgrade did
+not run in this release, so old files stayed behind. Upgrade to the newer
+release; it repairs this automatically.
