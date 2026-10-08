@@ -13,7 +13,7 @@ TorrServer DSM provides a native DSM interface for managing TorrServer on Synolo
 - SSL certificates: TorrServer's own, or taken from DSM / a manual path
 - HTTP authentication
 - Logs and package status
-- Restart TorrServer from DSM
+- Restart TorrServer from the Helper (no root needed)
 - Works out of the box, no root access needed for everyday use
   (see [Folder access and optional permissions](#folder-access-and-optional-permissions))
 
@@ -55,11 +55,10 @@ it tells you how to fix that the standard DSM way:
 > Control Panel → Shared Folder → select the folder → Edit → Permissions →
 > **System internal user** → give **TorrServer** *Read/Write*.
 
-Some things need root and are therefore **optional**. Without the permission
-below they are simply unavailable and everything else keeps working:
+Restarting TorrServer from the Helper works without root. A few things do need
+root and are therefore **optional**. Without the permission below they are
+simply unavailable and everything else keeps working:
 
-- restarting TorrServer from the Helper (restart it from DSM Package Center
-  instead),
 - certificates taken from DSM or from a manual path,
 - creating `Cache` / `FUSE` in a folder the service user cannot write to.
 

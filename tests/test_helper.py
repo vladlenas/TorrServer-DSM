@@ -337,7 +337,7 @@ class PrivilegeTests(Base):
         self.fake_sudo(cert=(0, ""), prepare=(0, ""))
         self.assertFalse(h.has_privileged_access(use_cache=False))
 
-    def test_restart_script_is_never_started_by_the_check(self):
+    def test_the_check_never_prompts_and_never_restarts(self):
         self.fake_sudo()
         h.has_privileged_access(use_cache=False)
         self.assertTrue(all(h.RESTART_SCRIPT not in cmd for cmd in self.calls))
@@ -510,13 +510,13 @@ class FormTests(Base):
         for pattern in (r"<fieldset[^>]*>", r'<input[^>]*name="port"[^>]*>',
                         r'<input[^>]*name="torrserver_dir"[^>]*>', r'<input[^>]*name="fuse"[^>]*>',
                         r'<input[^>]*name="https"[^>]*>', r'<option value="self"[^>]*>',
-                        r'<input[^>]*name="auth"[^>]*>', r'<button type="submit"[^>]*>Save'):
+                        r'<input[^>]*name="auth"[^>]*>', r'<button type="submit"[^>]*>Save',
+                        r'<button[^>]*formaction="./restart"[^>]*>'):
             self.assertNotIn("disabled", self.tag(page, pattern), pattern)
 
     def test_root_only_choices_are_locked_without_permissions(self):
         page = self.render(privileged=False)
-        for pattern in (r'<option value="dsm"[^>]*>', r'<option value="manual"[^>]*>',
-                        r'<button[^>]*formaction="./restart"[^>]*>'):
+        for pattern in (r'<option value="dsm"[^>]*>', r'<option value="manual"[^>]*>'):
             self.assertIn("disabled", self.tag(page, pattern), pattern)
 
     def test_everything_is_available_with_permissions(self):
@@ -525,6 +525,46 @@ class FormTests(Base):
                         r'<button[^>]*formaction="./restart"[^>]*>', r"<fieldset[^>]*>"):
             self.assertNotIn("disabled", self.tag(page, pattern), pattern)
 
+
+
+class RestartTests(unittest.TestCase):
+    """The restart needs neither root nor sudo."""
+
+    def run_restart(self, script_exists=True):
+        from unittest import mock
+        calls = []
+
+        class FakeProcess:
+            pid = 4242
+
+        def fake_popen(cmd, **kwargs):
+            calls.append((cmd, kwargs))
+            return FakeProcess()
+
+        with mock.patch.object(h.os.path, "isfile", return_value=script_exists), \
+                mock.patch.object(h.subprocess, "Popen", fake_popen):
+            return h.restart_torrserver(), calls
+
+    def test_restart_does_not_use_sudo(self):
+        (ok, _), calls = self.run_restart()
+        self.assertTrue(ok)
+        self.assertEqual(calls[0][0], ["/bin/sh", h.RESTART_SCRIPT])
+        self.assertNotIn("sudo", " ".join(calls[0][0]))
+
+    def test_restart_hands_over_the_helper_pid_and_detaches(self):
+        _, calls = self.run_restart()
+        kwargs = calls[0][1]
+        self.assertEqual(kwargs["env"]["TORRSERVER_HELPER_PID"], str(os.getpid()))
+        self.assertTrue(kwargs["start_new_session"])
+
+    def test_missing_script_is_reported(self):
+        (ok, message), calls = self.run_restart(script_exists=False)
+        self.assertFalse(ok)
+        self.assertEqual(calls, [])
+
+    def test_restart_script_is_the_shipped_one(self):
+        self.assertTrue(h.RESTART_SCRIPT.endswith("/scripts/restart-torrserver"))
+        self.assertTrue(os.path.isfile(os.path.join(ROOT, "src", "scripts", "restart-torrserver")))
 
 
 class LogRotationTests(Base):

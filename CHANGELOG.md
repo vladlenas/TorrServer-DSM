@@ -3,6 +3,25 @@
 The top entry is used as the GitHub release notes; keep its version equal to
 `PKG_VERSION` in `Makefile`.
 
+## 2.4.145.2 (2026-10-08)
+
+TorrServer itself is unchanged (`MatriX.145.2`).
+
+### Changed
+
+- **Restart from the Helper no longer needs root.** The Restart button is
+  always available. It stops and starts only the TorrServer process (the
+  Helper keeps running) and reads the saved settings again, so a new port,
+  HTTPS or password takes effect. Concurrent restarts are serialized and a
+  stale pid file is handled.
+- The package no longer ships the root restart service
+  (`pkg-TorrServer-restart.service`) or the `restart-package` script, and the
+  optional sudo rule no longer lists it. An existing rule keeps working; run
+  `setup-permissions` again to drop the old entry.
+- The optional permission is now needed only for DSM / manual certificates and
+  for folders the service user cannot write to; the texts in all five languages
+  say so.
+
 ## 2.3.145.2 (2026-10-07)
 
 TorrServer itself is unchanged (`MatriX.145.2`).

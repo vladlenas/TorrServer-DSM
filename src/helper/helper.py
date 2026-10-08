@@ -69,7 +69,7 @@ SSL_CERT_MODE_SELF = "self"
 SSL_CERT_MODE_DSM = "dsm"
 SSL_CERT_MODE_MANUAL = "manual"
 
-RESTART_SCRIPT = "/var/packages/TorrServer/scripts/restart-package"
+RESTART_SCRIPT = "/var/packages/TorrServer/scripts/restart-torrserver"
 CERTIFICATE_HELPER = "/var/packages/TorrServer/scripts/certificate-helper"
 PREPARE_DIRECTORY = "/var/packages/TorrServer/scripts/prepare-directory"
 
@@ -697,8 +697,7 @@ def has_privileged_access(use_cache=True):
     written by an older package version covers only some of them. Each check
     spawns sudo, so the result is cached briefly (a page render asks several
     times). prepare-directory is started without arguments, which makes it
-    print its usage text and do nothing; restart-package is not probed because
-    running it would restart the package.
+    print its usage text and do nothing; the restart script needs no root and is not probed.
     """
     now = time.monotonic()
 
@@ -951,26 +950,26 @@ def prepare_torrserver_directory(torrserver_dir):
         return False, str(e)
 
 
-def restart_package():
+def restart_torrserver():
     """
-    Start the package restart script through sudo.
+    Restart the TorrServer process; no root and no sudo are involved.
 
-    The restart-package script starts the external
-    The package restart unit is outside TorrServer.slice, so the restart
-    operation survives the package stop.
-    This keeps the restart operation alive after the package stops.
+    restart-torrserver stops the TorrServer binary and starts it again with
+    the saved settings. The helper keeps running, so it is not touched, and
+    its pid is handed over so the package pid file stays correct. The script
+    gets its own session and finishes after this request is answered.
     """
 
     if not os.path.isfile(RESTART_SCRIPT):
         return False, "Restart script not found"
 
+    environment = dict(os.environ)
+    environment["TORRSERVER_HELPER_PID"] = str(os.getpid())
+
     try:
         process = subprocess.Popen(
-            [
-                "/bin/sudo",
-                "-n",
-                RESTART_SCRIPT,
-            ],
+            ["/bin/sh", RESTART_SCRIPT],
+            env=environment,
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
             stdin=subprocess.DEVNULL,
@@ -2381,7 +2380,7 @@ def permissions_page():
 <div class="card">
     <h1>DSM permissions</h1>
     <p>
-        TorrServer works without additional privileges. Root access is only required for automatic certificate synchronization and restarting TorrServer from the Helper.
+        TorrServer works without additional privileges. Root access is only required for DSM and manual certificate synchronization and for folders that TorrServer cannot write to.
     </p>
 
     <div class="notice">
@@ -2437,9 +2436,7 @@ def settings_page(message="", torrserver_dir_override=""):
 {}
 </div>
 """.format(
-        "Some changes require a restart of the TorrServer service to take effect."
-        if privileged else
-        "Restart is unavailable until DSM permissions are configured.",
+        "Some changes require a restart of the TorrServer service to take effect.",
         sidebar=app_sidebar("settings"),
         language_selector=language_selector(),
     )
@@ -2468,7 +2465,7 @@ def settings_page(message="", torrserver_dir_override=""):
     </div>
     <div class="settings-card-body">
         <div class="help">
-            Extended DSM permissions are not configured. TorrServer itself continues to work, but certificate synchronization and restart from Helper are unavailable.
+            Extended DSM permissions are not configured. TorrServer itself continues to work, but DSM and manual certificates cannot be synchronized.
         </div>
         <div class="actions">
             <button type="button" onclick="openPermissions()">Setup permissions</button>
@@ -2622,7 +2619,7 @@ def settings_page(message="", torrserver_dir_override=""):
 
     <div class="actions">
         <button type="submit">Save</button>
-        <button type="submit" formaction="./restart" class="danger" {}>Restart</button>
+        <button type="submit" formaction="./restart" class="danger">Restart</button>
     </div>
 </div>
 
@@ -2744,7 +2741,6 @@ toggleAuth();
         html.escape(PASSWORD_PLACEHOLDER if saved_password else "", quote=True),
         html.escape(PASSWORD_PLACEHOLDER if saved_password else "", quote=True),
         "" if auth else "disabled",
-        "" if privileged else "disabled",
     )
 
     body += page_footer()
@@ -3229,23 +3225,7 @@ class Handler(BaseHTTPRequestHandler):
             return
 
         if path == "/restart":
-            if not has_privileged_access():
-                self.send_html(
-                    localize_html(
-                        page_header("Restart Error")
-                        + """
-<div class="card">
-<h1>Restart unavailable</h1>
-<p>Restart is unavailable until DSM permissions are configured.</p>
-</div>
-"""
-                        + page_footer()
-                    ),
-                    403
-                )
-                return
-
-            ok, message = restart_package()
+            ok, message = restart_torrserver()
 
             if ok:
                 self.redirect("./")
