@@ -69,7 +69,11 @@ SSL_CERT_MODE_SELF = "self"
 SSL_CERT_MODE_DSM = "dsm"
 SSL_CERT_MODE_MANUAL = "manual"
 
-RESTART_SCRIPT = "/var/packages/TorrServer/scripts/restart-package"
+RESTART_SCRIPT = "/var/packages/TorrServer/scripts/restart-torrserver"
+RESTART_LOCK = os.path.join(PACKAGE_VAR, "restart.lock")
+RESTART_MIN_SECONDS = 3
+RESTART_GIVE_UP_SECONDS = 90
+RESTART_STATE = {"started": None}
 CERTIFICATE_HELPER = "/var/packages/TorrServer/scripts/certificate-helper"
 PREPARE_DIRECTORY = "/var/packages/TorrServer/scripts/prepare-directory"
 
@@ -697,8 +701,7 @@ def has_privileged_access(use_cache=True):
     written by an older package version covers only some of them. Each check
     spawns sudo, so the result is cached briefly (a page render asks several
     times). prepare-directory is started without arguments, which makes it
-    print its usage text and do nothing; restart-package is not probed because
-    running it would restart the package.
+    print its usage text and do nothing; the restart script needs no root and is not probed.
     """
     now = time.monotonic()
 
@@ -951,26 +954,26 @@ def prepare_torrserver_directory(torrserver_dir):
         return False, str(e)
 
 
-def restart_package():
+def restart_torrserver():
     """
-    Start the package restart script through sudo.
+    Restart the TorrServer process; no root and no sudo are involved.
 
-    The restart-package script starts the external
-    The package restart unit is outside TorrServer.slice, so the restart
-    operation survives the package stop.
-    This keeps the restart operation alive after the package stops.
+    restart-torrserver stops the TorrServer binary and starts it again with
+    the saved settings. The helper keeps running, so it is not touched, and
+    its pid is handed over so the package pid file stays correct. The script
+    gets its own session and finishes after this request is answered.
     """
 
     if not os.path.isfile(RESTART_SCRIPT):
         return False, "Restart script not found"
 
+    environment = dict(os.environ)
+    environment["TORRSERVER_HELPER_PID"] = str(os.getpid())
+
     try:
         process = subprocess.Popen(
-            [
-                "/bin/sudo",
-                "-n",
-                RESTART_SCRIPT,
-            ],
+            ["/bin/sh", RESTART_SCRIPT],
+            env=environment,
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
             stdin=subprocess.DEVNULL,
@@ -981,10 +984,49 @@ def restart_package():
         if process.pid <= 0:
             return False, "Failed to start restart script"
 
+        RESTART_STATE["started"] = time.monotonic()
         return True, "Restarting..."
 
     except Exception as e:
         return False, str(e)
+
+
+def restart_finished():
+    """True once a restart started by this helper is over and TorrServer runs.
+
+    The script takes its lock right after it starts, so a short grace period
+    keeps the "no lock yet" moment from looking like "finished".
+    """
+    started = RESTART_STATE["started"]
+
+    if started is None:
+        return True
+
+    if time.monotonic() - started < RESTART_MIN_SECONDS:
+        return False
+
+    if os.path.isdir(RESTART_LOCK):
+        return False
+
+    return is_torrserver_running()
+
+
+def restart_in_progress():
+    """True while a restart started by this helper is still running.
+
+    Gives up after RESTART_GIVE_UP_SECONDS, so a TorrServer that never comes
+    back is shown as stopped instead of restarting forever.
+    """
+    started = RESTART_STATE["started"]
+
+    if started is None:
+        return False
+
+    if time.monotonic() - started > RESTART_GIVE_UP_SECONDS or restart_finished():
+        RESTART_STATE["started"] = None
+        return False
+
+    return True
 
 
 def get_api_auth_header():
@@ -1289,17 +1331,20 @@ def save_settings(params):
     if ssl_mode != SSL_CERT_MODE_SELF and not has_privileged_access():
         return False, "Additional DSM permissions are required for DSM and manual certificates."
 
-    if not torrserver_dir:
+    # The directory is optional: without one TorrServer keeps its data in the
+    # package folder. Only FUSE needs a place to mount.
+    if not torrserver_dir and fuse == "1":
         return False, "Choose the TorrServer directory with the Browse button"
 
-    if len(torrserver_dir) > 1:
-        torrserver_dir = torrserver_dir.rstrip("/")
+    if torrserver_dir:
+        if len(torrserver_dir) > 1:
+            torrserver_dir = torrserver_dir.rstrip("/")
 
-    if re.search(r"\s", torrserver_dir):
-        return False, "TorrServer directory must not contain spaces"
+        if re.search(r"\s", torrserver_dir):
+            return False, "TorrServer directory must not contain spaces"
 
-    if cache_browser_path(torrserver_dir) != torrserver_dir:
-        return False, "Invalid TorrServer directory"
+        if cache_browser_path(torrserver_dir) != torrserver_dir:
+            return False, "Invalid TorrServer directory"
 
     if ssl_mode == SSL_CERT_MODE_MANUAL:
         if not ssl_cert or not ssl_key:
@@ -1353,15 +1398,18 @@ def save_settings(params):
 
     # ---- 2. Apply. Side effects start only after validation succeeded.
 
-    ok, directory_message = prepare_torrserver_directory(torrserver_dir)
-    if not ok:
-        return False, directory_message
+    status = "applied"
 
-    # TorrServer is still listening on old_port at this point. If it is not
-    # running at all the change is queued and applied when it starts.
-    status, cache_message = set_cache_path(get_cache_dir(torrserver_dir), old_port)
-    if status == "error":
-        return False, cache_message
+    if torrserver_dir:
+        ok, directory_message = prepare_torrserver_directory(torrserver_dir)
+        if not ok:
+            return False, directory_message
+
+        # TorrServer is still listening on old_port at this point. If it is
+        # not running at all the change is queued and applied when it starts.
+        status, cache_message = set_cache_path(get_cache_dir(torrserver_dir), old_port)
+        if status == "error":
+            return False, cache_message
 
     try:
         if auth == "1":
@@ -1575,6 +1623,11 @@ button.danger:disabled,
     font-weight: 600;
 }}
 
+.status-restarting {{
+    color: #b45309;
+    font-weight: 600;
+}}
+
 .notice {{
     background: #fff7d6;
     border: 1px solid #e6cf75;
@@ -1724,6 +1777,7 @@ pre {{
 }}
 
 .status-text .status-running,
+.status-text .status-restarting,
 .status-text .status-stopped {{
     font-size: 23px;
 }}
@@ -2139,6 +2193,35 @@ def get_status_logo_data_uri():
     except Exception:
         return ""
 
+RESTART_WATCH_SCRIPT = """
+<script>
+(function () {
+    var started = Date.now();
+
+    function poll() {
+        if (Date.now() - started > 100000) {
+            window.location.reload();
+            return;
+        }
+
+        fetch('./restart-status', {cache: 'no-store', credentials: 'same-origin'})
+            .then(function (response) { return response.text(); })
+            .then(function (text) {
+                if (text.trim() === 'ready') {
+                    window.location.reload();
+                } else {
+                    setTimeout(poll, 1000);
+                }
+            })
+            .catch(function () { setTimeout(poll, 1500); });
+    }
+
+    setTimeout(poll, 1500);
+})();
+</script>
+"""
+
+
 def main_page(host):
     status = get_status()
 
@@ -2178,11 +2261,19 @@ def main_page(host):
 
     web_ui_actions = http_action + https_action
 
-    status_class = (
-        "status-running"
-        if status == "Running"
-        else "status-stopped"
-    )
+    restarting = restart_in_progress()
+
+    if restarting:
+        status = "Restarting"
+        status_class = "status-restarting"
+        status_text = "TorrServer is restarting. This page will update automatically."
+    else:
+        status_class = (
+            "status-running"
+            if status == "Running"
+            else "status-stopped"
+        )
+        status_text = "TorrServer is running normally."
 
     status_logo = get_status_logo_data_uri()
 
@@ -2327,10 +2418,13 @@ def main_page(host):
         html.escape(get_cpu_model()),
         get_cpu_cores(),
         html.escape(get_architecture()),
-        "TorrServer is running normally.",
+        status_text,
         '<div class="web-ui-actions">{}</div>'.format(web_ui_actions) if web_ui_actions else '',
         status_logo,
     )
+
+    if restarting:
+        body += RESTART_WATCH_SCRIPT
 
     body += page_footer()
     return localize_html(body)
@@ -2349,7 +2443,7 @@ def media_recommendations_page():
             Keep <b>“Show only active torrents”</b> disabled so Plex can see the library without starting torrents.
         </p>
         <p>
-            To avoid unnecessary reads of large virtual files, disable <b>“Perform extensive file analysis during maintenance”</b> and <b>“video preview thumbnails”</b> in Plex.
+            To avoid unnecessary reads of large virtual files, disable <b>“Perform extensive file analysis during maintenance”</b> and <b>“Video preview thumbnails”</b> in Plex.
         </p>
         <p>
             Normal library scanning can remain enabled. Background analysis and thumbnail generation may read large virtual files and cause significant CPU, network and storage load.
@@ -2381,7 +2475,7 @@ def permissions_page():
 <div class="card">
     <h1>DSM permissions</h1>
     <p>
-        TorrServer works without additional privileges. Root access is only required for automatic certificate synchronization and restarting TorrServer from the Helper.
+        TorrServer works without additional privileges. Root access is only required for DSM and manual certificate synchronization and for folders that TorrServer cannot write to.
     </p>
 
     <div class="notice">
@@ -2437,9 +2531,7 @@ def settings_page(message="", torrserver_dir_override=""):
 {}
 </div>
 """.format(
-        "Some changes require a restart of the TorrServer service to take effect."
-        if privileged else
-        "Restart is unavailable until DSM permissions are configured.",
+        "Some changes require a restart of the TorrServer service to take effect.",
         sidebar=app_sidebar("settings"),
         language_selector=language_selector(),
     )
@@ -2468,7 +2560,7 @@ def settings_page(message="", torrserver_dir_override=""):
     </div>
     <div class="settings-card-body">
         <div class="help">
-            Extended DSM permissions are not configured. TorrServer itself continues to work, but certificate synchronization and restart from Helper are unavailable.
+            Extended DSM permissions are not configured. TorrServer itself continues to work, but DSM and manual certificates cannot be synchronized.
         </div>
         <div class="actions">
             <button type="button" onclick="openPermissions()">Setup permissions</button>
@@ -2622,7 +2714,7 @@ def settings_page(message="", torrserver_dir_override=""):
 
     <div class="actions">
         <button type="submit">Save</button>
-        <button type="submit" formaction="./restart" class="danger" {}>Restart</button>
+        <button type="submit" formaction="./restart" class="danger">Restart</button>
     </div>
 </div>
 
@@ -2744,7 +2836,6 @@ toggleAuth();
         html.escape(PASSWORD_PLACEHOLDER if saved_password else "", quote=True),
         html.escape(PASSWORD_PLACEHOLDER if saved_password else "", quote=True),
         "" if auth else "disabled",
-        "" if privileged else "disabled",
     )
 
     body += page_footer()
@@ -3108,6 +3199,10 @@ class Handler(BaseHTTPRequestHandler):
             self.send_html(main_page(self.request_host()))
             return
 
+        if path == "/restart-status":
+            self.send_text("wait" if restart_in_progress() else "ready")
+            return
+
         if path == "/settings":
             query = parse_qs(parsed.query)
             torrserver_dir = query.get("torrserver_dir", [""])[0]
@@ -3229,23 +3324,7 @@ class Handler(BaseHTTPRequestHandler):
             return
 
         if path == "/restart":
-            if not has_privileged_access():
-                self.send_html(
-                    localize_html(
-                        page_header("Restart Error")
-                        + """
-<div class="card">
-<h1>Restart unavailable</h1>
-<p>Restart is unavailable until DSM permissions are configured.</p>
-</div>
-"""
-                        + page_footer()
-                    ),
-                    403
-                )
-                return
-
-            ok, message = restart_package()
+            ok, message = restart_torrserver()
 
             if ok:
                 self.redirect("./")

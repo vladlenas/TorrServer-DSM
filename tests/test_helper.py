@@ -227,6 +227,19 @@ class SaveSettingsTests(Base):
             self.assertFalse(ok, case)
         self.assertFalse(os.path.exists(h.PORT_FILE))
 
+    def test_settings_can_be_saved_without_a_directory(self):
+        self.patches_called = []
+        h.prepare_torrserver_directory = lambda d: self.patches_called.append(d) or (True, "")
+        ok, message = self.save(torrserver_dir="", port="8095")
+        self.assertTrue(ok, message)
+        self.assertEqual(h.read_file(h.PORT_FILE), "8095")
+        self.assertEqual(self.patches_called, [], "no directory means nothing to prepare")
+
+    def test_fuse_still_needs_a_directory(self):
+        ok, message = self.save(torrserver_dir="", fuse="1")
+        self.assertFalse(ok)
+        self.assertIn("Browse", message)
+
     def test_busy_https_port_only_matters_when_https_on(self):
         h.is_port_in_use = lambda n, allowed_ports=None: n == 8091
         self.assertTrue(self.save()[0])
@@ -337,7 +350,7 @@ class PrivilegeTests(Base):
         self.fake_sudo(cert=(0, ""), prepare=(0, ""))
         self.assertFalse(h.has_privileged_access(use_cache=False))
 
-    def test_restart_script_is_never_started_by_the_check(self):
+    def test_the_check_never_prompts_and_never_restarts(self):
         self.fake_sudo()
         h.has_privileged_access(use_cache=False)
         self.assertTrue(all(h.RESTART_SCRIPT not in cmd for cmd in self.calls))
@@ -510,13 +523,13 @@ class FormTests(Base):
         for pattern in (r"<fieldset[^>]*>", r'<input[^>]*name="port"[^>]*>',
                         r'<input[^>]*name="torrserver_dir"[^>]*>', r'<input[^>]*name="fuse"[^>]*>',
                         r'<input[^>]*name="https"[^>]*>', r'<option value="self"[^>]*>',
-                        r'<input[^>]*name="auth"[^>]*>', r'<button type="submit"[^>]*>Save'):
+                        r'<input[^>]*name="auth"[^>]*>', r'<button type="submit"[^>]*>Save',
+                        r'<button[^>]*formaction="./restart"[^>]*>'):
             self.assertNotIn("disabled", self.tag(page, pattern), pattern)
 
     def test_root_only_choices_are_locked_without_permissions(self):
         page = self.render(privileged=False)
-        for pattern in (r'<option value="dsm"[^>]*>', r'<option value="manual"[^>]*>',
-                        r'<button[^>]*formaction="./restart"[^>]*>'):
+        for pattern in (r'<option value="dsm"[^>]*>', r'<option value="manual"[^>]*>'):
             self.assertIn("disabled", self.tag(page, pattern), pattern)
 
     def test_everything_is_available_with_permissions(self):
@@ -525,6 +538,113 @@ class FormTests(Base):
                         r'<button[^>]*formaction="./restart"[^>]*>', r"<fieldset[^>]*>"):
             self.assertNotIn("disabled", self.tag(page, pattern), pattern)
 
+
+
+class RestartProgressTests(Base):
+    def setUp(self):
+        super().setUp()
+        self.saved = (h.RESTART_LOCK, h.is_torrserver_running, dict(h.RESTART_STATE))
+        h.RESTART_LOCK = os.path.join(VAR, "restart.lock")
+        self.running = True
+        h.is_torrserver_running = lambda: self.running
+        self.addCleanup(lambda: (setattr(h, "RESTART_LOCK", self.saved[0]),
+                                 setattr(h, "is_torrserver_running", self.saved[1]),
+                                 h.RESTART_STATE.update(self.saved[2])))
+
+    def started_ago(self, seconds):
+        h.RESTART_STATE["started"] = time.monotonic() - seconds
+
+    def test_nothing_to_wait_for_without_a_restart(self):
+        h.RESTART_STATE["started"] = None
+        self.assertTrue(h.restart_finished())
+
+    def test_not_finished_during_the_first_seconds(self):
+        self.started_ago(0.5)
+        self.assertFalse(h.restart_finished(), "the script may not hold its lock yet")
+
+    def test_not_finished_while_the_lock_is_held(self):
+        self.started_ago(10)
+        os.mkdir(h.RESTART_LOCK)
+        self.assertFalse(h.restart_finished())
+
+    def test_not_finished_while_torrserver_is_down(self):
+        self.started_ago(10)
+        self.running = False
+        self.assertFalse(h.restart_finished())
+
+    def test_finished_when_the_lock_is_gone_and_torrserver_runs(self):
+        self.started_ago(10)
+        self.assertTrue(h.restart_finished())
+
+    def test_in_progress_until_finished_then_never_again(self):
+        self.started_ago(10)
+        os.mkdir(h.RESTART_LOCK)
+        self.assertTrue(h.restart_in_progress())
+        os.rmdir(h.RESTART_LOCK)
+        self.assertFalse(h.restart_in_progress())
+        os.mkdir(h.RESTART_LOCK)                      # a later lock must not revive the old restart
+        self.assertFalse(h.restart_in_progress())
+
+    def test_gives_up_when_torrserver_never_comes_back(self):
+        self.started_ago(h.RESTART_GIVE_UP_SECONDS + 1)
+        self.running = False
+        self.assertFalse(h.restart_in_progress())
+
+    def test_status_page_shows_restarting_and_watches(self):
+        self.started_ago(10)
+        os.mkdir(h.RESTART_LOCK)
+        page = h.main_page("nas.local")
+        self.assertIn("status-restarting", page)
+        self.assertIn(">Restarting<", page)
+        self.assertIn("TorrServer is restarting. This page will update automatically.", page)
+        self.assertIn("./restart-status", page)
+        self.assertNotIn("TorrServer is running normally.", page)
+
+    def test_status_page_is_normal_when_not_restarting(self):
+        h.RESTART_STATE["started"] = None
+        page = h.main_page("nas.local")
+        self.assertNotIn("status-restarting", page.split("</style>")[1])
+        self.assertNotIn("./restart-status", page)
+
+
+class RestartTests(unittest.TestCase):
+    """The restart needs neither root nor sudo."""
+
+    def run_restart(self, script_exists=True):
+        from unittest import mock
+        calls = []
+
+        class FakeProcess:
+            pid = 4242
+
+        def fake_popen(cmd, **kwargs):
+            calls.append((cmd, kwargs))
+            return FakeProcess()
+
+        with mock.patch.object(h.os.path, "isfile", return_value=script_exists), \
+                mock.patch.object(h.subprocess, "Popen", fake_popen):
+            return h.restart_torrserver(), calls
+
+    def test_restart_does_not_use_sudo(self):
+        (ok, _), calls = self.run_restart()
+        self.assertTrue(ok)
+        self.assertEqual(calls[0][0], ["/bin/sh", h.RESTART_SCRIPT])
+        self.assertNotIn("sudo", " ".join(calls[0][0]))
+
+    def test_restart_hands_over_the_helper_pid_and_detaches(self):
+        _, calls = self.run_restart()
+        kwargs = calls[0][1]
+        self.assertEqual(kwargs["env"]["TORRSERVER_HELPER_PID"], str(os.getpid()))
+        self.assertTrue(kwargs["start_new_session"])
+
+    def test_missing_script_is_reported(self):
+        (ok, message), calls = self.run_restart(script_exists=False)
+        self.assertFalse(ok)
+        self.assertEqual(calls, [])
+
+    def test_restart_script_is_the_shipped_one(self):
+        self.assertTrue(h.RESTART_SCRIPT.endswith("/scripts/restart-torrserver"))
+        self.assertTrue(os.path.isfile(os.path.join(ROOT, "src", "scripts", "restart-torrserver")))
 
 
 class LogRotationTests(Base):
@@ -720,7 +840,7 @@ esac
 
     def test_every_route_and_method_is_protected(self):
         for path in ("/", "/settings", "/logs", "/browse?path=/", "/read-log?name=TorrServer.log",
-                     "/download-log?name=TorrServer.log", "/permissions", "/recommendations"):
+                     "/download-log?name=TorrServer.log", "/permissions", "/recommendations", "/restart-status"):
             self.assertEqual(self.get(path)[0], 403, path)
         for path in ("/settings", "/restart", "/language"):
             status, _, _ = self.get(path, method="POST", data=b"x=1",

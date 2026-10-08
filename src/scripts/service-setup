@@ -85,8 +85,13 @@ if [ "$(cat "${CONFIG_DIR}/torrserver.fuse" 2>/dev/null)" = "1" ]; then
     fi
 fi
 
-SERVICE_COMMAND="/bin/python3 ${SYNOPKG_PKGDEST}/helper/helper.py
-${SYNOPKG_PKGDEST}/bin/TorrServer -d ${SYNOPKG_PKGVAR} -p ${TORRSERVER_PORT} ${AUTH_ARGS} ${SSL_ARGS} ${FUSE_ARGS} -l ${TORRSERVER_LOG}"
+HELPER_COMMAND="/bin/python3 ${SYNOPKG_PKGDEST}/helper/helper.py"
+TORRSERVER_COMMAND="${SYNOPKG_PKGDEST}/bin/TorrServer -d ${SYNOPKG_PKGVAR} -p ${TORRSERVER_PORT} ${AUTH_ARGS} ${SSL_ARGS} ${FUSE_ARGS} -l ${TORRSERVER_LOG}"
+
+# One command per line; the helper must stay first (its pid is the first one
+# in the pid file, and restart-torrserver keeps it).
+SERVICE_COMMAND="${HELPER_COMMAND}
+${TORRSERVER_COMMAND}"
 
 update_firewall_port()
 {
@@ -125,7 +130,9 @@ service_prestart()
     fi
 
     if [ -x "${CERTIFICATE_HELPER}" ]; then
-        if ! /bin/sudo -n "${CERTIFICATE_HELPER}" sync; then
+        # sudo's own "a password is required" is dropped: it only repeats the
+        # warning below. certificate-helper logs its real errors to Helper.log.
+        if ! /bin/sudo -n "${CERTIFICATE_HELPER}" sync 2>/dev/null; then
             echo "Warning: TLS certificate synchronization is unavailable. Configure DSM permissions if required."
         fi
     fi
