@@ -21,6 +21,13 @@ TorrServer itself is unchanged (`MatriX.145.2`).
 - The optional permission is now needed only for DSM / manual certificates and
   for folders the service user cannot write to; the texts in all five languages
   say so.
+- While TorrServer restarts, the status page shows **Restarting** and updates
+  itself when TorrServer is back (before, it jumped to a stale page and the new
+  port only appeared after switching tabs).
+- The TorrServer folder is optional: the port, password and HTTPS can be saved
+  without choosing one. Only FUSE still needs a folder.
+- The service log no longer repeats sudo's "a password is required" line when
+  the optional permission is not configured.
 
 ## 2.3.145.2 (2026-10-07)
 

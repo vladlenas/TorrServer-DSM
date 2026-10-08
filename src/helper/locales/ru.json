@@ -91,7 +91,7 @@
   "FUSE can be used as a media library source for Emby.": "FUSE можно использовать как источник медиатеки для Emby.",
   "Background task behavior with TorrServer FUSE has not been tested in this version.": "Работа фоновых задач Emby с TorrServer FUSE в этой версии не тестировалась.",
   "Keep <b>“Show only active torrents”</b> disabled so Plex can see the library without starting torrents.": "Оставьте параметр <b>«Показывать только активные торренты»</b> выключенным, чтобы Plex мог видеть медиатеку, не запуская торренты.",
-  "To avoid unnecessary reads of large virtual files, disable <b>“Perform extensive file analysis during maintenance”</b> and <b>“video preview thumbnails”</b> in Plex.": "Чтобы избежать ненужного чтения больших виртуальных файлов, отключите в Plex <b>«Выполнять расширенный анализ файлов во время технического обслуживания»</b> и <b>«создание видеоминиатюр»</b>.",
+  "To avoid unnecessary reads of large virtual files, disable <b>“Perform extensive file analysis during maintenance”</b> and <b>“Video preview thumbnails”</b> in Plex.": "Чтобы избежать ненужного чтения больших виртуальных файлов, отключите в Plex <b>«Выполнять расширенный анализ файлов во время технического обслуживания»</b> и <b>«Создание видеоминиатюр»</b>.",
   "The TorrServer service user cannot write to this folder. Give the TorrServer user Read/Write permission on the shared folder (DSM Control Panel → Shared Folder → Edit → Permissions → System internal user), or enable the optional DSM permissions on the DSM permissions page.": "У пользователя службы TorrServer нет права записи в эту папку. Дайте пользователю TorrServer разрешение «Чтение/запись» на общую папку (Панель управления DSM → Общая папка → Редактировать → Разрешения → Внутренний пользователь системы) или включите дополнительные права DSM на странице «Права DSM».",
   "DSM permissions are missing or out of date. Run /var/packages/TorrServer/scripts/setup-permissions as root in DSM Task Scheduler (the permissions were extended in this version), then try again": "Права DSM не настроены или устарели. Запустите /var/packages/TorrServer/scripts/setup-permissions от имени root в Планировщике задач DSM (в этой версии права расширены), затем повторите попытку.",
   "Choose the TorrServer directory with the Browse button": "Выберите каталог TorrServer кнопкой «Обзор».",
@@ -130,5 +130,7 @@
   "Access denied": "Доступ запрещён",
   "Sign in to DSM as an administrator and open the TorrServer DSM application.": "Войдите в DSM как администратор и откройте приложение TorrServer DSM.",
   "Forbidden": "Запрещено",
-  "Cross-site request rejected. Reload the page and try again.": "Межсайтовый запрос отклонён. Обновите страницу и повторите попытку."
+  "Cross-site request rejected. Reload the page and try again.": "Межсайтовый запрос отклонён. Обновите страницу и повторите попытку.",
+  "Restarting": "Перезапуск",
+  "TorrServer is restarting. This page will update automatically.": "TorrServer перезапускается. Страница обновится автоматически."
 }

@@ -91,7 +91,7 @@
   "FUSE can be used as a media library source for Emby.": "FUSE galima naudoti kaip Emby medijos bibliotekos šaltinį.",
   "Background task behavior with TorrServer FUSE has not been tested in this version.": "Emby fono užduočių veikimas su TorrServer FUSE šioje versijoje nebuvo išbandytas.",
   "Keep <b>“Show only active torrents”</b> disabled so Plex can see the library without starting torrents.": "Palikite parinktį <b>„Rodyti tik aktyvius torrentus“</b> išjungtą, kad Plex galėtų matyti biblioteką nepaleisdamas torrentų.",
-  "To avoid unnecessary reads of large virtual files, disable <b>“Perform extensive file analysis during maintenance”</b> and <b>“video preview thumbnails”</b> in Plex.": "Kad išvengtumėte nereikalingo didelių virtualių failų skaitymo, Plex išjunkite <b>„Atlikti išsamią failų analizę priežiūros metu“</b> ir <b>„vaizdo įrašų peržiūros miniatiūras“</b>.",
+  "To avoid unnecessary reads of large virtual files, disable <b>“Perform extensive file analysis during maintenance”</b> and <b>“Video preview thumbnails”</b> in Plex.": "Kad išvengtumėte nereikalingo didelių virtualių failų skaitymo, Plex išjunkite <b>„Atlikti išsamią failų analizę priežiūros metu“</b> ir <b>„Vaizdo įrašų peržiūros miniatiūras“</b>.",
   "The TorrServer service user cannot write to this folder. Give the TorrServer user Read/Write permission on the shared folder (DSM Control Panel → Shared Folder → Edit → Permissions → System internal user), or enable the optional DSM permissions on the DSM permissions page.": "TorrServer paslaugos naudotojas negali rašyti į šį aplanką. Suteikite naudotojui TorrServer teisę Read/Write bendrinamam aplankui (DSM Control Panel → Shared Folder → Edit → Permissions → System internal user) arba įjunkite pasirenkamas DSM teises puslapyje „DSM teisės“.",
   "DSM permissions are missing or out of date. Run /var/packages/TorrServer/scripts/setup-permissions as root in DSM Task Scheduler (the permissions were extended in this version), then try again": "DSM teisės nesukonfigūruotos arba pasenusios. Paleiskite /var/packages/TorrServer/scripts/setup-permissions kaip root DSM Task Scheduler (šioje versijoje teisės išplėstos), tada bandykite dar kartą.",
   "Choose the TorrServer directory with the Browse button": "Pasirinkite TorrServer katalogą mygtuku „Naršyti“.",
@@ -130,5 +130,7 @@
   "Access denied": "Prieiga uždrausta",
   "Sign in to DSM as an administrator and open the TorrServer DSM application.": "Prisijunkite prie DSM kaip administratorius ir atidarykite programą TorrServer DSM.",
   "Forbidden": "Draudžiama",
-  "Cross-site request rejected. Reload the page and try again.": "Tarpsvetainių užklausa atmesta. Atnaujinkite puslapį ir bandykite dar kartą."
+  "Cross-site request rejected. Reload the page and try again.": "Tarpsvetainių užklausa atmesta. Atnaujinkite puslapį ir bandykite dar kartą.",
+  "Restarting": "Paleidimas iš naujo",
+  "TorrServer is restarting. This page will update automatically.": "TorrServer paleidžiamas iš naujo. Šis puslapis atsinaujins automatiškai."
 }

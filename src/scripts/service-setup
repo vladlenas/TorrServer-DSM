@@ -130,7 +130,9 @@ service_prestart()
     fi
 
     if [ -x "${CERTIFICATE_HELPER}" ]; then
-        if ! /bin/sudo -n "${CERTIFICATE_HELPER}" sync; then
+        # sudo's own "a password is required" is dropped: it only repeats the
+        # warning below. certificate-helper logs its real errors to Helper.log.
+        if ! /bin/sudo -n "${CERTIFICATE_HELPER}" sync 2>/dev/null; then
             echo "Warning: TLS certificate synchronization is unavailable. Configure DSM permissions if required."
         fi
     fi

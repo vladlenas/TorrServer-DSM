@@ -227,6 +227,19 @@ class SaveSettingsTests(Base):
             self.assertFalse(ok, case)
         self.assertFalse(os.path.exists(h.PORT_FILE))
 
+    def test_settings_can_be_saved_without_a_directory(self):
+        self.patches_called = []
+        h.prepare_torrserver_directory = lambda d: self.patches_called.append(d) or (True, "")
+        ok, message = self.save(torrserver_dir="", port="8095")
+        self.assertTrue(ok, message)
+        self.assertEqual(h.read_file(h.PORT_FILE), "8095")
+        self.assertEqual(self.patches_called, [], "no directory means nothing to prepare")
+
+    def test_fuse_still_needs_a_directory(self):
+        ok, message = self.save(torrserver_dir="", fuse="1")
+        self.assertFalse(ok)
+        self.assertIn("Browse", message)
+
     def test_busy_https_port_only_matters_when_https_on(self):
         h.is_port_in_use = lambda n, allowed_ports=None: n == 8091
         self.assertTrue(self.save()[0])
@@ -527,6 +540,73 @@ class FormTests(Base):
 
 
 
+class RestartProgressTests(Base):
+    def setUp(self):
+        super().setUp()
+        self.saved = (h.RESTART_LOCK, h.is_torrserver_running, dict(h.RESTART_STATE))
+        h.RESTART_LOCK = os.path.join(VAR, "restart.lock")
+        self.running = True
+        h.is_torrserver_running = lambda: self.running
+        self.addCleanup(lambda: (setattr(h, "RESTART_LOCK", self.saved[0]),
+                                 setattr(h, "is_torrserver_running", self.saved[1]),
+                                 h.RESTART_STATE.update(self.saved[2])))
+
+    def started_ago(self, seconds):
+        h.RESTART_STATE["started"] = time.monotonic() - seconds
+
+    def test_nothing_to_wait_for_without_a_restart(self):
+        h.RESTART_STATE["started"] = None
+        self.assertTrue(h.restart_finished())
+
+    def test_not_finished_during_the_first_seconds(self):
+        self.started_ago(0.5)
+        self.assertFalse(h.restart_finished(), "the script may not hold its lock yet")
+
+    def test_not_finished_while_the_lock_is_held(self):
+        self.started_ago(10)
+        os.mkdir(h.RESTART_LOCK)
+        self.assertFalse(h.restart_finished())
+
+    def test_not_finished_while_torrserver_is_down(self):
+        self.started_ago(10)
+        self.running = False
+        self.assertFalse(h.restart_finished())
+
+    def test_finished_when_the_lock_is_gone_and_torrserver_runs(self):
+        self.started_ago(10)
+        self.assertTrue(h.restart_finished())
+
+    def test_in_progress_until_finished_then_never_again(self):
+        self.started_ago(10)
+        os.mkdir(h.RESTART_LOCK)
+        self.assertTrue(h.restart_in_progress())
+        os.rmdir(h.RESTART_LOCK)
+        self.assertFalse(h.restart_in_progress())
+        os.mkdir(h.RESTART_LOCK)                      # a later lock must not revive the old restart
+        self.assertFalse(h.restart_in_progress())
+
+    def test_gives_up_when_torrserver_never_comes_back(self):
+        self.started_ago(h.RESTART_GIVE_UP_SECONDS + 1)
+        self.running = False
+        self.assertFalse(h.restart_in_progress())
+
+    def test_status_page_shows_restarting_and_watches(self):
+        self.started_ago(10)
+        os.mkdir(h.RESTART_LOCK)
+        page = h.main_page("nas.local")
+        self.assertIn("status-restarting", page)
+        self.assertIn(">Restarting<", page)
+        self.assertIn("TorrServer is restarting. This page will update automatically.", page)
+        self.assertIn("./restart-status", page)
+        self.assertNotIn("TorrServer is running normally.", page)
+
+    def test_status_page_is_normal_when_not_restarting(self):
+        h.RESTART_STATE["started"] = None
+        page = h.main_page("nas.local")
+        self.assertNotIn("status-restarting", page.split("</style>")[1])
+        self.assertNotIn("./restart-status", page)
+
+
 class RestartTests(unittest.TestCase):
     """The restart needs neither root nor sudo."""
 
@@ -760,7 +840,7 @@ esac
 
     def test_every_route_and_method_is_protected(self):
         for path in ("/", "/settings", "/logs", "/browse?path=/", "/read-log?name=TorrServer.log",
-                     "/download-log?name=TorrServer.log", "/permissions", "/recommendations"):
+                     "/download-log?name=TorrServer.log", "/permissions", "/recommendations", "/restart-status"):
             self.assertEqual(self.get(path)[0], 403, path)
         for path in ("/settings", "/restart", "/language"):
             status, _, _ = self.get(path, method="POST", data=b"x=1",
