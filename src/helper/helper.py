@@ -1011,6 +1011,54 @@ def restart_finished():
     return is_torrserver_running()
 
 
+def last_problem_lines(count=3, width=220):
+    """The last lines of whichever service log was written most recently.
+
+    That is where TorrServer's own start-up errors end up (for example a port
+    that is already taken), so the status page can say why it is stopped.
+    """
+    newest = None
+
+    for path in (TORRSERVER_LOG, SERVICE_LOG):
+        try:
+            modified = os.path.getmtime(path)
+        except OSError:
+            continue
+        if newest is None or modified > newest[0]:
+            newest = (modified, path)
+
+    if newest is None:
+        return []
+
+    try:
+        with open(newest[1], "rb") as handle:
+            handle.seek(0, os.SEEK_END)
+            handle.seek(max(0, handle.tell() - 16384))
+            text = handle.read().decode("utf-8", errors="replace")
+    except OSError:
+        return []
+
+    lines = [line.strip() for line in text.splitlines() if line.strip()]
+    return [line[:width] for line in lines[-count:]]
+
+
+def stopped_info_html():
+    lines = last_problem_lines()
+    block = '<div class="stopped-info">'
+
+    if lines:
+        block += '<div class="status-subtitle">Last lines of the log:</div><pre>{}</pre>'.format(
+            html.escape("\n".join(lines))
+        )
+
+    block += (
+        '<form method="post" action="./restart">'
+        '<button type="submit">Start</button>'
+        '</form></div>'
+    )
+    return block
+
+
 def restart_in_progress():
     """True while a restart started by this helper is still running.
 
@@ -1621,6 +1669,76 @@ button.danger:disabled,
 .status-stopped {{
     color: #c62828;
     font-weight: 600;
+}}
+
+.media-hint {{
+    margin: 2px 0 14px;
+    padding: 12px 14px;
+    border: 1px solid #e2e8f0;
+    border-radius: 6px;
+    background: #f8fafc;
+}}
+
+.media-hint summary {{
+    cursor: pointer;
+    font-weight: 600;
+    color: #30415e;
+}}
+
+.media-grid {{
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 18px;
+    margin-top: 10px;
+}}
+
+.media-hint ul {{
+    margin: 6px 0 0;
+    padding-left: 18px;
+    color: #40536f;
+}}
+
+.media-hint li {{
+    margin-bottom: 4px;
+}}
+
+@media (max-width: 800px) {{
+    .media-grid {{
+        grid-template-columns: 1fr;
+    }}
+}}
+
+.permission-help {{
+    margin: 10px 0;
+}}
+
+.permission-help summary {{
+    cursor: pointer;
+    font-weight: 600;
+    color: #30415e;
+    margin-bottom: 8px;
+}}
+
+.permission-help pre {{
+    min-height: 0;
+    padding: 10px 12px;
+    margin: 8px 0;
+    font-size: 12px;
+}}
+
+.permission-help .notice {{
+    margin: 8px 0;
+}}
+
+.stopped-info {{
+    margin-top: 10px;
+}}
+
+.stopped-info pre {{
+    min-height: 0;
+    font-size: 12px;
+    padding: 10px 12px;
+    margin: 6px 0 10px;
 }}
 
 .status-restarting {{
@@ -2273,7 +2391,10 @@ def main_page(host):
             if status == "Running"
             else "status-stopped"
         )
-        status_text = "TorrServer is running normally."
+        if status == "Running":
+            status_text = "TorrServer is running normally."
+        else:
+            status_text = "TorrServer is not running."
 
     status_logo = get_status_logo_data_uri()
 
@@ -2310,6 +2431,7 @@ def main_page(host):
     <div class="status-text">
         <div class="{0}">{1}</div>
         <div class="status-subtitle">{14}</div>
+        {stopped_info}
     </div>
     {15}
 </div>
@@ -2421,6 +2543,7 @@ def main_page(host):
         status_text,
         '<div class="web-ui-actions">{}</div>'.format(web_ui_actions) if web_ui_actions else '',
         status_logo,
+        stopped_info=stopped_info_html() if (status == "Stopped" and not restarting) else "",
     )
 
     if restarting:
@@ -2430,72 +2553,77 @@ def main_page(host):
     return localize_html(body)
 
 
-def media_recommendations_page():
-    body = page_header("Media Server Recommendations")
-    body += """
-<div class="card">
-    <h1>Media Server Recommendations</h1>
-
-    <div class="notice">
-        <strong>Plex</strong>
-        <p>
-            FUSE can be used as a media library source for Plex.
-            Keep <b>“Show only active torrents”</b> disabled so Plex can see the library without starting torrents.
-        </p>
-        <p>
-            To avoid unnecessary reads of large virtual files, disable <b>“Perform extensive file analysis during maintenance”</b> and <b>“Video preview thumbnails”</b> in Plex.
-        </p>
-        <p>
-            Normal library scanning can remain enabled. Background analysis and thumbnail generation may read large virtual files and cause significant CPU, network and storage load.
-        </p>
+AUTH_CARD = """
+<div class="settings-card">
+    <div class="settings-card-title">
+        <span class="metric-icon">●</span>
+        <span>Authentication</span>
     </div>
+    <div class="settings-card-body">
 
-    <div class="notice">
-        <strong>Emby</strong>
-        <p>
-            FUSE can be used as a media library source for Emby.
-        </p>
-        <p>
-            Background task behavior with TorrServer FUSE has not been tested in this version.
-        </p>
-    </div>
+        <div class="checkbox-row">
+            <label>
+                <input type="checkbox" name="auth" value="1" {} onchange="toggleAuth()">
+                Enable authentication
+            </label>
+        </div>
 
-    <div class="actions">
-        <button type="button" onclick="window.close()">Close</button>
+        <div id="authFields">
+            <div class="form-row">
+                <label for="username">Username</label>
+                <input id="username" type="text" name="username" value="{}" {}>
+            </div>
+
+            <div class="form-row">
+                <label for="password">Password</label>
+                <input id="password" type="password" name="password" value="{}" data-password-placeholder="{}" {}>
+            </div>
+        </div>
+
     </div>
 </div>
 """
-    body += page_footer()
-    return localize_html(body)
 
 
-def permissions_page():
-    body = page_header("DSM Permissions")
-    body += """
-<div class="card">
-    <h1>DSM permissions</h1>
-    <p>
-        TorrServer works without additional privileges. Root access is only required for DSM and manual certificate synchronization and for folders that TorrServer cannot write to.
-    </p>
-
-    <div class="notice">
-        <strong>One-time setup</strong><br>
-        Open Task Scheduler in DSM and create a User-defined script task. Select root as the user and run the following command once:
-    </div>
-
-    <pre>/var/packages/TorrServer/scripts/setup-permissions</pre>
-
-    <div class="help">
-        After the task finishes, return to TorrServer Settings and click Check permissions.
-    </div>
-
-    <div class="actions">
-        <button type="button" onclick="window.close()">Close</button>
-    </div>
-</div>
+def permissions_block(privileged):
+    """The DSM permissions help inside the certificate card (no extra window)."""
+    if privileged:
+        return """
+        <div class="status-running">Extended DSM permissions are configured.</div>
 """
-    body += page_footer()
-    return localize_html(body)
+
+    return """
+        <div class="help">
+            Extended DSM permissions are not configured. TorrServer itself continues to work, but DSM and manual certificates cannot be synchronized.
+        </div>
+
+        <details class="permission-help">
+            <summary>DSM permissions</summary>
+
+            <div class="help">
+                TorrServer works without additional privileges. Root access is only required for DSM and manual certificate synchronization and for folders that TorrServer cannot write to.
+            </div>
+
+            <div class="notice">
+                <strong>One-time setup</strong><br>
+                Open Task Scheduler in DSM and create a User-defined script task. Select root as the user and run the following command once:
+            </div>
+
+            <pre>/var/packages/TorrServer/scripts/setup-permissions</pre>
+
+            <div class="help">
+                After the task finishes, return to TorrServer Settings and click Check permissions.
+            </div>
+
+            <div class="help">
+                Instead, DSM can provide HTTPS with its own certificate through a reverse proxy rule for the TorrServer port. TorrServer HTTPS can then stay off.
+            </div>
+        </details>
+
+        <div style="margin-top:10px">
+            <button type="button" class="secondary" onclick="window.location.reload()">Check permissions</button>
+        </div>
+"""
 
 
 def settings_page(message="", torrserver_dir_override=""):
@@ -2539,37 +2667,6 @@ def settings_page(message="", torrserver_dir_override=""):
     if message:
         body += '<div class="notice">{}</div>'.format(html.escape(message))
 
-    if privileged:
-        body += """
-<div class="settings-card">
-    <div class="settings-card-title">
-        <span class="metric-icon">✓</span>
-        <span>DSM permissions</span>
-    </div>
-    <div class="settings-card-body">
-        <div class="status-running">Extended DSM permissions are configured.</div>
-    </div>
-</div>
-"""
-    else:
-        body += """
-<div class="settings-card">
-    <div class="settings-card-title">
-        <span class="metric-icon">!</span>
-        <span>DSM permissions</span>
-    </div>
-    <div class="settings-card-body">
-        <div class="help">
-            Extended DSM permissions are not configured. TorrServer itself continues to work, but DSM and manual certificates cannot be synchronized.
-        </div>
-        <div class="actions">
-            <button type="button" onclick="openPermissions()">Setup permissions</button>
-            <button type="button" class="secondary" onclick="window.location.reload()">Check permissions</button>
-        </div>
-    </div>
-</div>
-"""
-
     body += """
 <div class="settings-layout">
 
@@ -2594,24 +2691,50 @@ def settings_page(message="", torrserver_dir_override=""):
                 <input id="torrserverDir" type="text" name="torrserver_dir" value="{}" placeholder="/volume1/...">
                 <button type="button" class="secondary" onclick="openTorrServerBrowser()">Browse</button>
             </div>
+            <div class="help" style="grid-column:2">
+                Optional. The Cache and FUSE folders are created here: Cache for the TorrServer disk cache and FUSE for the virtual file system. The disk cache is switched on in the TorrServer web interface.
+            </div>
         </div>
 
         <div class="checkbox-row">
             <label>
-                <input type="checkbox" name="fuse" value="1" {} {}>
+                <input type="checkbox" name="fuse" value="1" {} {} onchange="toggleFuseHint()">
                 Enable FUSE filesystem
             </label>
         </div>
 
-        <div class="actions">
-            <button type="button" class="secondary"
-                    onclick="window.open('./recommendations', 'TorrServerRecommendations', 'width=900,height=800,resizable=yes,scrollbars=yes')">
-                Media Server Recommendations
-            </button>
+        <div id="fuseHint" class="media-hint">
+            <details>
+                <summary>Using FUSE with Plex or Emby</summary>
+
+                <div class="media-grid">
+                    <div>
+                        <strong>Plex</strong>
+                        <ul>
+                            <li>FUSE can be used as a media library source for Plex.</li>
+                            <li>Keep <b>“Show only active torrents”</b> disabled so Plex can see the library without starting torrents.</li>
+                            <li>To avoid unnecessary reads of large virtual files, disable <b>“Perform extensive file analysis during maintenance”</b> and <b>“Video preview thumbnails”</b> in Plex.</li>
+                        </ul>
+                    </div>
+                    <div>
+                        <strong>Emby</strong>
+                        <ul>
+                            <li>FUSE can be used as a media library source for Emby.</li>
+                            <li>Background task behavior with TorrServer FUSE has not been tested in this version.</li>
+                        </ul>
+                    </div>
+                </div>
+
+                <div class="help">
+                    Normal library scanning can remain enabled. Background analysis and thumbnail generation may read large virtual files and cause significant CPU, network and storage load.
+                </div>
+            </details>
         </div>
 
     </div>
 </div>
+
+{auth_card}
 
 <div class="settings-card">
     <div class="settings-card-title">
@@ -2681,37 +2804,12 @@ def settings_page(message="", torrserver_dir_override=""):
             The selected source will be synchronized to TorrServer server.pem/server.key.
         </div>
 
+        {permissions}
+
     </div>
 </div>
 
 <div class="settings-card">
-    <div class="settings-card-title">
-        <span class="metric-icon">●</span>
-        <span>Authentication</span>
-    </div>
-    <div class="settings-card-body">
-
-        <div class="checkbox-row">
-            <label>
-                <input type="checkbox" name="auth" value="1" {} onchange="toggleAuth()">
-                Enable authentication
-            </label>
-        </div>
-
-        <div id="authFields">
-            <div class="form-row">
-                <label for="username">Username</label>
-                <input id="username" type="text" name="username" value="{}" {}>
-            </div>
-
-            <div class="form-row">
-                <label for="password">Password</label>
-                <input id="password" type="password" name="password" value="{}" data-password-placeholder="{}" {}>
-            </div>
-        </div>
-
-    </div>
-
     <div class="actions">
         <button type="submit">Save</button>
         <button type="submit" formaction="./restart" class="danger">Restart</button>
@@ -2723,14 +2821,6 @@ def settings_page(message="", torrserver_dir_override=""):
 </div>
 
 <script>
-function openPermissions() {{
-    window.open(
-        './permissions',
-        'TorrServerPermissions',
-        'width=760,height=700,resizable=yes,scrollbars=yes'
-    );
-}}
-
 function toggleHttps() {{
     var enabled = document.querySelector('input[name="https"]').checked;
     document.getElementById('httpsPort').disabled = !enabled;
@@ -2775,6 +2865,11 @@ function toggleAuth() {{
     }}
 }}
 
+function toggleFuseHint() {{
+    var checkbox = document.querySelector('input[name="fuse"]');
+    document.getElementById('fuseHint').style.display = checkbox.checked ? 'block' : 'none';
+}}
+
 function openTorrServerBrowser() {{
     var field = document.querySelector('input[name="torrserver_dir"]');
     var path = field.value.trim();
@@ -2802,6 +2897,7 @@ if (passwordField) {{
 toggleHttps();
 toggleSslMode();
 toggleAuth();
+toggleFuseHint();
 </script>
 """.format(
         "",
@@ -2830,12 +2926,15 @@ toggleAuth();
         ),
         html.escape(ssl_cert, quote=True),
         html.escape(ssl_key, quote=True),
-        "checked" if auth else "",
-        html.escape(saved_username, quote=True),
-        "" if auth else "disabled",
-        html.escape(PASSWORD_PLACEHOLDER if saved_password else "", quote=True),
-        html.escape(PASSWORD_PLACEHOLDER if saved_password else "", quote=True),
-        "" if auth else "disabled",
+        permissions=permissions_block(privileged),
+        auth_card=AUTH_CARD.format(
+            "checked" if auth else "",
+            html.escape(saved_username, quote=True),
+            "" if auth else "disabled",
+            html.escape(PASSWORD_PLACEHOLDER if saved_password else "", quote=True),
+            html.escape(PASSWORD_PLACEHOLDER if saved_password else "", quote=True),
+            "" if auth else "disabled",
+        ),
     )
 
     body += page_footer()
@@ -3211,14 +3310,6 @@ class Handler(BaseHTTPRequestHandler):
                     torrserver_dir_override=torrserver_dir
                 )
             )
-            return
-
-        if path == "/permissions":
-            self.send_html(permissions_page())
-            return
-
-        if path == "/recommendations":
-            self.send_html(media_recommendations_page())
             return
 
         if path == "/browse":

@@ -540,6 +540,122 @@ class FormTests(Base):
 
 
 
+class PermissionsInSettingsTests(FormTests):
+    """The permission help lives inside the certificate card; there is no extra window."""
+
+    def test_no_separate_permissions_window(self):
+        page = self.render(privileged=False)
+        self.assertNotIn("openPermissions", page)
+        self.assertNotIn("Setup permissions", page)
+        self.assertFalse(hasattr(h, "permissions_page"))
+
+    def test_without_permissions_the_help_is_in_the_certificate_card(self):
+        page = self.render(privileged=False)
+        card = page[page.index("SSL Certificate</span>"):]
+        card = card[:card.index('<button type="submit">Save')]
+        for text in ("/var/packages/TorrServer/scripts/setup-permissions", "Task Scheduler",
+                     "reverse proxy", "Check permissions", "<details"):
+            self.assertIn(text, card)
+
+    def test_with_permissions_only_a_short_confirmation_is_shown(self):
+        page = self.render(privileged=True)
+        self.assertIn("Extended DSM permissions are configured.", page)
+        self.assertNotIn("setup-permissions", page)
+        self.assertNotIn("permission-help\"", page.split("</style>")[1])
+
+    def test_the_restart_button_needs_no_permissions(self):
+        # render() patches module state and must be called once per test.
+        tag = self.tag(self.render(privileged=False), r'<button[^>]*formaction="./restart"[^>]*>')
+        self.assertNotIn("disabled", tag)
+
+
+class SettingsLayoutTests(FormTests):
+    """Order of the cards and the inline FUSE / disk cache help."""
+
+    def titles(self, page):
+        return re.findall(r'<div class="settings-card-title">\s*<span class="metric-icon">[^<]*</span>\s*<span>([^<]*)</span>', page)
+
+    def test_authentication_comes_before_the_certificate_and_the_buttons_come_last(self):
+        page = self.render(privileged=False)
+        titles = self.titles(page)
+        self.assertLess(titles.index("Authentication"), titles.index("SSL Certificate"))
+        self.assertLess(page.index("SSL Certificate</span>"), page.index('<button type="submit">Save'))
+        self.assertEqual(page.count('<button type="submit">Save'), 1)
+
+    def test_no_media_server_window_any_more(self):
+        page = self.render(privileged=False)
+        self.assertNotIn("recommendations", page)
+        self.assertFalse(hasattr(h, "media_recommendations_page"))
+
+    def test_fuse_help_is_inline_and_follows_the_checkbox(self):
+        page = self.render(privileged=False)
+        self.assertIn('id="fuseHint"', page)
+        self.assertIn("toggleFuseHint()", page)
+        for text in ("Plex", "Emby", "Video preview thumbnails"):
+            self.assertIn(text, page)
+
+    def test_the_directory_help_explains_the_disk_cache(self):
+        page = self.render(privileged=False)
+        self.assertIn("Cache for the TorrServer disk cache", page)
+
+
+class StoppedStatusTests(Base):
+    def setUp(self):
+        super().setUp()
+        self.saved = (h.is_torrserver_running, h.TORRSERVER_LOG, h.SERVICE_LOG, dict(h.RESTART_STATE))
+        h.is_torrserver_running = lambda: False
+        h.TORRSERVER_LOG = os.path.join(VAR, "TorrServer.log")
+        h.SERVICE_LOG = os.path.join(VAR, "service.log")
+        h.RESTART_STATE["started"] = None
+        self.addCleanup(lambda: (setattr(h, "is_torrserver_running", self.saved[0]),
+                                 setattr(h, "TORRSERVER_LOG", self.saved[1]),
+                                 setattr(h, "SERVICE_LOG", self.saved[2]),
+                                 h.RESTART_STATE.update(self.saved[3])))
+
+    def write(self, path, text, age=0):
+        with open(path, "w", encoding="utf-8") as f:
+            f.write(text)
+        os.utime(path, (time.time() - age, time.time() - age))
+
+    def test_running_page_has_no_start_button(self):
+        h.is_torrserver_running = lambda: True
+        page = h.main_page("nas.local")
+        self.assertNotIn(">Start<", page)
+        self.assertIn("TorrServer is running normally.", page)
+
+    def test_stopped_page_says_so_and_offers_start(self):
+        page = h.main_page("nas.local")
+        self.assertIn("TorrServer is not running.", page)
+        self.assertNotIn("TorrServer is running normally.", page)
+        self.assertRegex(page, r'<form method="post" action="./restart"><button type="submit">Start</button>')
+
+    def test_the_last_lines_of_the_newest_log_are_shown(self):
+        self.write(h.TORRSERVER_LOG, "old one\nold two\n", age=100)
+        self.write(h.SERVICE_LOG, "a\nb\n\nlisten tcp :8090: bind: address already in use\nexit status 1\n")
+        lines = h.last_problem_lines()
+        self.assertEqual(lines[-2:], ["listen tcp :8090: bind: address already in use", "exit status 1"])
+        self.assertEqual(len(lines), 3)
+        self.assertNotIn("old one", "".join(lines))
+        page = h.main_page("nas.local")
+        self.assertIn("address already in use", page)
+        self.assertIn("Last lines of the log:", page)
+
+    def test_log_text_is_escaped_and_cut(self):
+        self.write(h.SERVICE_LOG, "<script>alert(1)</script>" + "x" * 500 + "\n")
+        self.assertTrue(all(len(line) <= 220 for line in h.last_problem_lines()))
+        page = h.main_page("nas.local")
+        self.assertNotIn("<script>alert(1)", page)
+        self.assertIn("&lt;script&gt;", page)
+
+    def test_no_logs_means_no_log_block(self):
+        self.assertEqual(h.last_problem_lines(), [])
+        self.assertNotIn("Last lines of the log:", h.main_page("nas.local"))
+
+    def test_while_restarting_there_is_no_start_button(self):
+        h.RESTART_STATE["started"] = time.monotonic()
+        self.assertNotIn(">Start<", h.main_page("nas.local"))
+
+
 class RestartProgressTests(Base):
     def setUp(self):
         super().setUp()
@@ -840,7 +956,7 @@ esac
 
     def test_every_route_and_method_is_protected(self):
         for path in ("/", "/settings", "/logs", "/browse?path=/", "/read-log?name=TorrServer.log",
-                     "/download-log?name=TorrServer.log", "/permissions", "/recommendations", "/restart-status"):
+                     "/download-log?name=TorrServer.log", "/recommendations", "/restart-status"):
             self.assertEqual(self.get(path)[0], 403, path)
         for path in ("/settings", "/restart", "/language"):
             status, _, _ = self.get(path, method="POST", data=b"x=1",

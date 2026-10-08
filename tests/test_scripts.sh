@@ -191,7 +191,7 @@ FAKE
     rst() { # rst <helper pid> [extra env...]
         h="$1"; shift
         env "$@" TORRSERVER_HELPER_PID="$h" FAKE_ARGS_FILE="$S/args.txt" SYNOPKG_PKGNAME=TorrServer SYNOPKG_DSM_VERSION_MAJOR=7 \
-            SYNOPKG_PKGDEST="$S/target" SYNOPKG_PKGVAR="$S/var" SVC_WAIT_TIMEOUT=3 sh "$S/scripts/restart-torrserver"
+            SYNOPKG_PKGDEST="$S/target" SYNOPKG_PKGVAR="$S/var" RESTART_STOP_TIMEOUT=3 sh "$S/scripts/restart-torrserver"
     }
     rm -f "$S/var/torrserver.port"
     ssc start >/dev/null; sleep 1
@@ -239,6 +239,23 @@ FAKE
 
     for p in $(ps -eo pid=,args= | grep "$S/target/bin/TorrServer" | grep -v grep | awk '{print $1}'); do kill -9 "$p" 2>/dev/null; done
     kill -9 "$HELPER_PID" 2>/dev/null; rm -f "$S/var/TorrServer.pid" "$S/var/torrserver.port"
+
+    echo "== restart-torrserver: a short DSM timeout does not cut the shutdown short"
+    cat > "$S/target/bin/TorrServer" <<'SLOW'
+#!/bin/sh
+# needs 3 seconds to shut down after SIGTERM
+trap 'sleep 3; exit 0' TERM
+while true; do sleep 1; done
+SLOW
+    ssc start >/dev/null; sleep 1
+    set -- $(cat "$S/var/TorrServer.pid"); H="$1"; SLOW_TS="$2"
+    : > "$S/var/service.log"
+    env SVC_WAIT_TIMEOUT=1 TORRSERVER_HELPER_PID="$H" FAKE_ARGS_FILE="$S/args.txt" SYNOPKG_PKGNAME=TorrServer SYNOPKG_DSM_VERSION_MAJOR=7 \
+        SYNOPKG_PKGDEST="$S/target" SYNOPKG_PKGVAR="$S/var" sh "$S/scripts/restart-torrserver"; rc=$?
+    check "restart succeeds although DSM says SVC_WAIT_TIMEOUT=1" [ "$rc" -eq 0 ]
+    check "...the slow TorrServer was stopped gracefully"        sh -c "! grep -q 'ignored SIGTERM' '$S/var/service.log'"
+    for p in $(ps -eo pid=,args= | grep "$S/target/bin/TorrServer" | grep -v grep | awk '{print $1}'); do kill -9 "$p" 2>/dev/null; done
+    kill -9 "$H" 2>/dev/null; rm -f "$S/var/TorrServer.pid"
 
     # A service that ignores SIGTERM must still be stopped (SIGKILL after the timeout).
     cat > "$S/target/bin/TorrServer" <<'STUBBORN'

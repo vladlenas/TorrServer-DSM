@@ -17,7 +17,9 @@ export SYNOPKG_PKGNAME SYNOPKG_DSM_VERSION_MAJOR SYNOPKG_PKGDEST SYNOPKG_PKGVAR
 # shellcheck disable=SC1091
 . "$(dirname "$0")/service-setup" || exit 1
 
-STOP_TIMEOUT="${SVC_WAIT_TIMEOUT:-20}"
+# How long TorrServer gets to shut down cleanly before it is killed. Not taken
+# from SVC_WAIT_TIMEOUT: DSM may pass a short value for its own stop handling.
+STOP_TIMEOUT="${RESTART_STOP_TIMEOUT:-20}"
 LOCK_DIR="${CONFIG_DIR}/restart.lock"
 
 log()

@@ -48,7 +48,13 @@ Add this source to your Synology NAS Package Center:
 **Nothing needs to be set up for a normal install.** You can change the port,
 the password, HTTPS with the built-in certificate and FUSE right away.
 
-The only thing the Helper needs is a folder for the cache. If the service user
+The TorrServer folder is optional. Leave it empty and TorrServer keeps its
+data where it already is; the disk cache is then switched on in the TorrServer
+web interface. Choose a folder only if you want the Helper to prepare `Cache`
+(and `FUSE`) for you. Ticking **FUSE** shows a short inline hint on using it
+with Plex or Emby; there is no separate recommendations window.
+
+If the service user
 may write there, the Helper creates `Cache` and `FUSE` itself. If it may not,
 it tells you how to fix that the standard DSM way:
 
@@ -67,11 +73,26 @@ task, select **root** as the user, and run once:
 
     /var/packages/TorrServer/scripts/setup-permissions
 
-The Helper shows the same instruction in a separate window and can check
-whether the permission is configured. Package scripts do not run as root, so
-the rule is not removed on uninstall. Remove it with:
+The Helper shows the same instruction inside the **SSL Certificate** card on
+the Settings page and can check whether the permission is configured. Package
+scripts do not run as root, so the rule is not removed on uninstall. Remove it
+with:
 
     sudo rm -f /etc/sudoers.d/TorrServer
+
+### HTTPS without the permission
+
+DSM certificates need root, but you do not have to give it. Let DSM provide
+HTTPS itself: **Control Panel → Login Portal → Advanced → Reverse Proxy**, add a
+rule from an HTTPS address of your choice to `http://localhost:<TorrServer
+port>`, and keep HTTPS in TorrServer switched off. DSM then serves the
+certificate it already manages.
+
+### When TorrServer is stopped
+
+The Status page shows the last lines of the log (usually the reason, for
+example a port that is already in use) and a **Start** button. Starting needs
+no root either.
 
 ## Upgrading
 
