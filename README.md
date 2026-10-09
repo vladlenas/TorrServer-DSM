@@ -10,7 +10,8 @@ TorrServer DSM provides a native DSM interface for managing TorrServer on Synolo
   English, Russian, Ukrainian, Lithuanian and Polish
 - Port configuration for HTTP / HTTPS, Force HTTPS
 - TorrServer cache folder and optional FUSE
-- SSL certificates: TorrServer's own, or taken from DSM / a manual path
+- SSL certificates: TorrServer's own, or taken from DSM; a certificate of your own
+  is uploaded on TorrServer's page (see [SSL certificates](#ssl-certificates))
 - HTTP authentication
 - Logs and package status
 - Restart TorrServer from the Helper (no root needed)
@@ -21,6 +22,9 @@ TorrServer DSM provides a native DSM interface for managing TorrServer on Synolo
 
 - Synology DSM 7.3 or newer (verified on DSM 7.4.1)
 - A DSM **administrator** account to open the Helper
+- Python 3.7 or newer for the Helper. DSM 7 includes it; if it is missing on your
+  system, install **Python 3** from DSM Package Center and restart the package
+  (the log says so: `Python 3 was not found`)
 - Supported architectures:
   - `amd64` (Intel / AMD, `x86_64`)
   - `arm64` (`aarch64`)
@@ -65,7 +69,7 @@ Restarting TorrServer from the Helper works without root. A few things do need
 root and are therefore **optional**. Without the permission below they are
 simply unavailable and everything else keeps working:
 
-- certificates taken from DSM or from a manual path,
+- certificates taken from DSM,
 - creating `Cache` / `FUSE` in a folder the service user cannot write to.
 
 To enable them, open **DSM Task Scheduler**, create a **User-defined script**
@@ -80,19 +84,70 @@ with:
 
     sudo rm -f /etc/sudoers.d/TorrServer
 
-### HTTPS without the permission
-
-DSM certificates need root, but you do not have to give it. Let DSM provide
-HTTPS itself: **Control Panel → Login Portal → Advanced → Reverse Proxy**, add a
-rule from an HTTPS address of your choice to `http://localhost:<TorrServer
-port>`, and keep HTTPS in TorrServer switched off. DSM then serves the
-certificate it already manages.
-
 ### When TorrServer is stopped
 
 The Status page shows the last lines of the log (usually the reason, for
 example a port that is already in use) and a **Start** button. Starting needs
 no root either.
+
+## SSL certificates
+
+HTTPS is switched on in the Helper (**Settings → HTTPS**). Which certificate
+TorrServer then serves depends on where it comes from. All files are in the
+package data folder, `/var/packages/TorrServer/var/`.
+
+| Source | Where you set it | Files | Renewal |
+| --- | --- | --- | --- |
+| TorrServer's own, self-signed (default) | Helper, **TorrServer self-signed** | `server.pem`, `server.key`, made by TorrServer | TorrServer renews it itself; browsers warn about it |
+| A DSM certificate (for example Let's Encrypt for your domain) | Helper, **DSM certificate** | `server.pem`, `server.key`, copied from DSM | copied again at every start or restart of TorrServer |
+| A certificate of your own (TorrServer 146 or newer) | TorrServer's web page: **Settings → Additional → HTTPS** (PRO mode, shown only while HTTPS is on) | `ssl/uploaded.crt`, `ssl/uploaded.key` | no restart needed; you upload it again when it expires |
+
+**Self-signed.** Nothing to do. TorrServer makes the pair when it is missing and
+makes a new one before it expires.
+
+**DSM certificate.** Needs the optional permission (see
+[Folder access and optional permissions](#folder-access-and-optional-permissions)),
+because TorrServer's service user cannot read DSM's certificates. Choose the
+certificate in the Helper and save. `certificate-helper` (it runs as root through
+sudo, and only reads DSM's certificate folder, `/usr/syno/etc/certificate`) copies the chosen
+certificate and key to `server.pem` and `server.key`, owned by the service user
+(the key readable by it only). The copy is made when TorrServer starts or is
+restarted. When DSM renews the certificate, restart TorrServer (the Helper's
+**Restart** button) so the new copy is picked up. The choice is saved in
+`torrserver.ssl.mode`, `torrserver.ssl.cert` and `torrserver.ssl.key`.
+
+**Your own certificate on TorrServer's page.** Upload a PEM certificate chain and
+an unencrypted key, or point TorrServer to files it can read. An upload is
+copied to `ssl/uploaded.crt` and `ssl/uploaded.key`, and TorrServer saves the
+choice in its own settings database, so it survives restarts and wins over
+`server.pem` and `server.key`. For example, export the certificate in DSM
+(**Control Panel → Security → Certificate → Action → Export certificate**) and
+upload `fullchain.pem` and `privkey.pem` from the exported archive there.
+
+**How the two fit together.** While a certificate uploaded on TorrServer's page
+is in use, the Helper says so in its **SSL Certificate** card and does not let
+you change the source there, because that choice would have no effect. Switch
+TorrServer back to its self-signed certificate on its own page (the uploaded
+copy is deleted then) and the Helper's choice is available again. A
+certificate set on TorrServer's page by file path (not uploaded) is not
+detected by the Helper.
+
+**Back to self-signed in the Helper.** Choosing **TorrServer self-signed** after
+a DSM certificate removes the copied `server.pem` and `server.key`, and
+TorrServer makes its own pair when it is restarted. (Older versions kept the copied
+certificate, so the DSM one was still served.)
+
+**Older setups.** An installation that already used **Manual paths** keeps it and
+it keeps working. New setups no longer offer it: use TorrServer's page.
+
+**HTTPS without the permission.** DSM certificates need root, but you do not have
+to give it. Let DSM provide HTTPS itself: **Control Panel → Login Portal →
+Advanced → Reverse Proxy**, add a rule from an HTTPS address of your choice to
+`http://localhost:<TorrServer port>`, and keep HTTPS in TorrServer switched
+off. DSM then serves the certificate it already manages.
+
+Problems with certificates are written to `TorrServer.log` (lines starting with
+`certificate-helper:`; TorrServer's own messages about HTTPS are there as well).
 
 ## Upgrading
 
@@ -118,7 +173,7 @@ the optional features as unavailable.
   `authenticate.cgi` who the caller is and serves **DSM administrators only**.
   Everything else gets `403`, and it fails closed (if the check cannot be
   performed, nobody gets in). The reason for a refusal is written to
-  `service.log` (`helper-auth: ...`). Never expose port 42777.
+  `TorrServer.log` (`helper-auth: ...`). Never expose port 42777.
 - State-changing requests are accepted only from the same origin (CSRF guard).
 - Directories and certificate paths must be under `/volumeN/` and must not
   contain `..` or point through symbolic links. The TorrServer directory must
@@ -131,14 +186,19 @@ the optional features as unavailable.
 | Symptom | Cause and fix |
 |---|---|
 | The Helper window is blank | Reload DSM with **Ctrl+Shift+R**. If it stays blank, open the browser console (F12) and look for lines starting with `[TorrServer]`. |
-| "Access denied" in the Helper | Sign in to DSM as an administrator. If you are one, see the reason: `sudo grep helper-auth /var/packages/TorrServer/var/service.log \| tail`. |
+| "Access denied" in the Helper | Sign in to DSM as an administrator. If you are one, see the reason: `sudo grep helper-auth /var/packages/TorrServer/var/TorrServer.log \| tail`. |
 | "The TorrServer service user cannot write to this folder" | Give the **TorrServer** user Read/Write on the shared folder (see above). |
 | "sudo: a password is required" or "DSM permissions are missing or out of date" | Only needed for the optional features: run `setup-permissions` again (see above). |
-| TorrServer is not reachable | Check the Logs tab (`TorrServer.log`, `service.log`), then restart the package from DSM Package Center. |
+| TorrServer is not reachable | Check the Logs tab, then restart the package from DSM Package Center. |
 
-Logs: `TorrServer.log` (TorrServer's own) and `service.log` (service output,
-Helper messages) are in `/var/packages/TorrServer/var/` and in the Helper's
-**Logs** tab.
+Logs: everything goes to one file, `TorrServer.log`, in
+`/var/packages/TorrServer/var/` and in the Helper's **Logs** tab. TorrServer,
+the start/stop scripts (`service:`, `restart-torrserver:`), the Helper and the
+certificate script (`certificate-helper:`) write to it in the same format. The
+file is never wiped when the service starts, so what happened before a crash is
+still there afterwards, and you can read or download it while TorrServer is
+stopped. It is rotated at 2 MB (`TorrServer.log.1`, `.2`). Older versions
+also kept `service.log` and `Helper.log`; an upgrade removes them.
 
 ## Development
 
