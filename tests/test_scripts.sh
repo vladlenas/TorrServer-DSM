@@ -210,6 +210,18 @@ FAKE
     ssc status >/dev/null; rc=$?
     check "helper gone: status exits 3"                      [ "$rc" -eq 3 ]
 
+    # Stopping also removes a FUSE mount that TorrServer did not release.
+    printf '#!/bin/sh\necho "$*" >> "$FAKE_UMOUNT_LOG"\n' > "$S/fake-fusermount"; chmod +x "$S/fake-fusermount"
+    echo "torrserver-fuse /volume1/left/FUSE fuse.torrserver rw 0 0" > "$S/mounts"
+    : > "$S/umount.log"
+    export MOUNTS_FILE="$S/mounts" FUSERMOUNT_CMD="$S/fake-fusermount" FAKE_UMOUNT_LOG="$S/umount.log"
+    ssc start >/dev/null; sleep 1
+    check "start unmounts a leftover FUSE mount first"       grep -qx -- "-u -z -- /volume1/left/FUSE" "$S/umount.log"
+    : > "$S/umount.log"
+    ssc stop >/dev/null; sleep 1
+    check "stop removes a leftover FUSE mount as well"       grep -qx -- "-u -z -- /volume1/left/FUSE" "$S/umount.log"
+    unset MOUNTS_FILE FUSERMOUNT_CMD FAKE_UMOUNT_LOG
+
     echo 9999 > "$S/var/torrserver.port"
     ssc start >/dev/null; sleep 1
     check "a saved port is used on the next start"           sh -c "grep -A1 -x -- '-p' '$S/args.txt' | grep -qx 9999"
@@ -334,6 +346,42 @@ out="$(PYTHON_CANDIDATES="$TMP/py/none" run_setup 'echo "$HELPER_COMMAND"')"
 check "...and with none the old path stays (the log says why)" sh -c "echo '$out' | grep -q '^/bin/python3 '"
 PYTHON_CANDIDATES="$TMP/py/none" run_setup 'service_prestart' >/dev/null 2>&1
 check "...no Python: the log tells to install Python 3"  grep -q "Python 3 was not found" "$VAR/TorrServer.log"
+
+echo "== a FUSE mount left behind is removed before TorrServer starts"
+setup_var self; rm -f "$VAR/TorrServer.log"
+cat > "$TMP/fake-fusermount" <<'FAKE'
+#!/bin/sh
+printf '%s\n' "$*" >> "$FAKE_UMOUNT_LOG"
+case "$*" in *broken*) exit 1 ;; esac
+exit 0
+FAKE
+chmod +x "$TMP/fake-fusermount"
+cat > "$TMP/mounts" <<'MOUNTS'
+fusectl /sys/fs/fuse/connections fusectl rw,nosuid,nodev,noexec,relatime 0 0
+torrserver-fuse /volume1/docker/PlexTorr/FUSE fuse.torrserver rw,nosuid,nodev,relatime,user_id=179006,group_id=179006,allow_other 0 0
+torrserver-fuse /volume1/my\040films/FUSE fuse.torrserver rw,nosuid,nodev,relatime,user_id=179006,group_id=179006,allow_other 0 0
+torrserver-fuse /volume1/broken/FUSE fuse.torrserver rw,nosuid,nodev,relatime,user_id=179006,group_id=179006,allow_other 0 0
+other /volume1/other fuse.sshfs rw 0 0
+MOUNTS
+: > "$TMP/umount.log"
+MOUNTS_FILE="$TMP/mounts" FUSERMOUNT_CMD="$TMP/fake-fusermount" FAKE_UMOUNT_LOG="$TMP/umount.log" \
+    run_setup 'cleanup_stale_fuse_mounts' >/dev/null 2>&1
+check "every leftover fuse.torrserver mount is unmounted (lazily)" grep -qx -- "-u -z -- /volume1/docker/PlexTorr/FUSE" "$TMP/umount.log"
+check "...a path with a space is decoded"                          grep -qx -- "-u -z -- /volume1/my films/FUSE" "$TMP/umount.log"
+check "...other mounts are not touched"                            sh -c "! grep -q -e fusectl -e sshfs -e /volume1/other '$TMP/umount.log'"
+check "...it is written to the log"                                grep -q "Unmounted a leftover FUSE mount at /volume1/docker/PlexTorr/FUSE" "$VAR/TorrServer.log"
+check "...one that cannot be unmounted says how to do it by hand"  grep -q "umount -l '/volume1/broken/FUSE'" "$VAR/TorrServer.log"
+
+# A running TorrServer owns its mount: nothing is unmounted then.
+mkdir -p "$TMP/target/bin"
+printf '#!/bin/sh\nwhile true; do sleep 1; done\n' > "$TMP/target/bin/TorrServer"; chmod +x "$TMP/target/bin/TorrServer"
+"$TMP/target/bin/TorrServer" & RUNNING=$!
+sleep 1; : > "$TMP/umount.log"
+MOUNTS_FILE="$TMP/mounts" FUSERMOUNT_CMD="$TMP/fake-fusermount" FAKE_UMOUNT_LOG="$TMP/umount.log" \
+    run_setup 'cleanup_stale_fuse_mounts' >/dev/null 2>&1
+kill "$RUNNING" 2>/dev/null; wait "$RUNNING" 2>/dev/null
+check "a running TorrServer: nothing is unmounted"                 sh -c "[ ! -s '$TMP/umount.log' ]"
+rm -rf "$TMP/target/bin"
 
 echo "== preinst: the install stops with a message when there is no Python 3"
 pre() { # pre <PYTHON_CANDIDATES> : run the real preinst the way DSM does

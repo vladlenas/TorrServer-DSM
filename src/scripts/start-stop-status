@@ -53,6 +53,8 @@ stop_daemon ()
         done
         rm -f "${PID_FILE}"
     fi
+    # TorrServer is gone: a FUSE mount it could not release must not stay behind.
+    cleanup_stale_fuse_mounts
 }
 
 #------------------------------------------------------

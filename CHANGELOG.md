@@ -3,6 +3,21 @@
 The top entry is used as the GitHub release notes; keep its version equal to
 `PKG_VERSION` in `Makefile`.
 
+## 2.7.146 (2026-10-09)
+
+TorrServer stays at `MatriX.146`.
+
+### Fixed
+
+- **A FUSE folder that could not be opened.** When TorrServer ended without
+  releasing its FUSE mount (killed, crashed, or the folder was changed while
+  Plex or Docker still used it), the mount was left behind with nothing serving
+  it, and the folder could not be opened at all, not even in File Station.
+  The package now removes such leftover mounts every time TorrServer starts,
+  restarts or stops (never while TorrServer is running), and writes what it
+  did to `TorrServer.log`. If one cannot be removed, the log gives the command
+  to run by hand (`umount -l <mount point>`).
+
 ## 2.6.146 (2026-10-09)
 
 TorrServer updated from `MatriX.145.2` to `MatriX.146`.

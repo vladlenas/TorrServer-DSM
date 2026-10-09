@@ -189,6 +189,7 @@ the optional features as unavailable.
 | "Access denied" in the Helper | Sign in to DSM as an administrator. If you are one, see the reason: `sudo grep helper-auth /var/packages/TorrServer/var/TorrServer.log \| tail`. |
 | "The TorrServer service user cannot write to this folder" | Give the **TorrServer** user Read/Write on the shared folder (see above). |
 | "sudo: a password is required" or "DSM permissions are missing or out of date" | Only needed for the optional features: run `setup-permissions` again (see above). |
+| A folder cannot be opened (not even in File Station) after FUSE was used | A FUSE mount was left behind when TorrServer ended without releasing it (for example it was killed while Plex or Docker still used the folder). The package removes such mounts every time it starts, restarts or stops TorrServer; to do it by hand, as root: `grep fuse.torrserver /proc/mounts`, then `umount -l <mount point>`. |
 | TorrServer is not reachable | Check the Logs tab, then restart the package from DSM Package Center. |
 
 Logs: everything goes to one file, `TorrServer.log`, in
