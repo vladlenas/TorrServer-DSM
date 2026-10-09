@@ -140,12 +140,67 @@ dst.ports=\"${firewall_ports}/tcp\""
     /usr/syno/sbin/synopkghelper update "${SYNOPKG_PKGNAME}" port-config >/dev/null 2>&1
 }
 
+# TorrServer mounts its FUSE folder itself and normally unmounts it when it
+# ends. After a kill, a crash or a changed folder a mount can be left behind
+# with nothing serving it; the folder then cannot be opened at all (not even in
+# File Station). Called only while TorrServer is stopped: unmounts every
+# leftover "fuse.torrserver" mount. MOUNTS_FILE and FUSERMOUNT_CMD can be set
+# by the tests.
+torrserver_is_running()
+{
+    for _cmdline in /proc/[0-9]*/cmdline; do
+        _words="$(tr '\0' '\n' < "${_cmdline}" 2>/dev/null | head -n 2)"
+        case "
+${_words}
+" in
+            *"
+${SYNOPKG_PKGDEST}/bin/TorrServer
+"*)
+                return 0
+                ;;
+        esac
+    done
+    return 1
+}
+
+cleanup_stale_fuse_mounts()
+{
+    _mounts="${MOUNTS_FILE:-/proc/mounts}"
+    [ -r "${_mounts}" ] || return 0
+
+    # A running TorrServer owns its mount: leave everything alone.
+    if torrserver_is_running; then
+        return 0
+    fi
+
+    _umount="${FUSERMOUNT_CMD:-}"
+    if [ -z "${_umount}" ]; then
+        for _candidate in fusermount fusermount3; do
+            _umount="$(command -v "${_candidate}" 2>/dev/null)" && break
+            _umount=""
+        done
+    fi
+
+    while read -r _dev _mp _type _rest; do
+        [ "${_type}" = "fuse.torrserver" ] || continue
+        # /proc/mounts writes a space in a path as \040.
+        _path="$(printf '%b' "${_mp}")"
+        if [ -n "${_umount}" ] && ${_umount} -u -z -- "${_path}" >/dev/null 2>&1; then
+            service_log service "Unmounted a leftover FUSE mount at ${_path}"
+        else
+            service_log service "Warning: a leftover FUSE mount at ${_path} could not be unmounted; as root run: umount -l '${_path}'"
+        fi
+    done < "${_mounts}"
+}
+
 # Called by start-stop-status right before the daemon is started.
 service_prestart()
 {
     if [ -z "${PYTHON_BIN}" ]; then
         service_log service "ERROR: Python 3 was not found, so the Helper cannot start. Install Python 3 from DSM Package Center, then restart the package."
     fi
+
+    cleanup_stale_fuse_mounts
 
     if [ -n "${FUSE_SKIPPED_REASON}" ]; then
         service_log service "Warning: ${FUSE_SKIPPED_REASON}. FUSE is disabled for this start."
