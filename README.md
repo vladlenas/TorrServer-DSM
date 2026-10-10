@@ -63,8 +63,9 @@ web interface. Choose a folder only if you want the Helper to prepare `Cache`
 with Plex or Emby; there is no separate recommendations window.
 
 If the **TorrServer** user may write there, the Helper creates `Cache` and
-`FUSE` itself. If it may not, the Helper tells you how to fix that the standard
-DSM way:
+`FUSE` itself. The folder chooser marks folders it cannot write to with
+"no write access" and warns before you save. If you save such a folder anyway,
+the Helper names it and the shared folder to fix, the standard DSM way:
 
 > Control Panel → Shared Folder → select the folder → Edit → Permissions →
 > **System internal user** → give **TorrServer** *Read/Write*.
@@ -191,7 +192,7 @@ certificate on TorrServer's page.
 |---|---|
 | The Helper window is blank | Reload DSM with **Ctrl+Shift+R**. If it stays blank, open the browser console (F12) and look for lines starting with `[TorrServer]`. |
 | "Access denied" in the Helper | Sign in to DSM as an administrator. If you are one, see the reason: `sudo grep helper-auth /var/packages/TorrServer/var/TorrServer.log \| tail`. |
-| "The TorrServer service user cannot write to this folder" | Give the **TorrServer** user Read/Write on the shared folder (see above). |
+| "The TorrServer service user cannot write to /volumeN/…" | The message names the folder and the shared folder to fix. Give the **TorrServer** user Read/Write on that shared folder (see above). The folder chooser already marks such folders with "no write access" and warns before you save. |
 | HTTPS shows a certificate warning | The self-signed default is in use. Upload a certificate on TorrServer's page or use a reverse proxy (see [SSL certificates](#ssl-certificates)). |
 | A folder cannot be opened (not even in File Station) after FUSE was used | A FUSE mount was left behind when TorrServer ended without releasing it (for example it was killed while Plex or Docker still used the folder). The package removes such mounts every time it starts, restarts or stops TorrServer; to do it by hand, as root: `grep fuse.torrserver /proc/mounts`, then `umount -l <mount point>`. |
 | TorrServer is not reachable | Check the Logs tab, then restart the package from DSM Package Center. |

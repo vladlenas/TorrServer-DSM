@@ -3,6 +3,24 @@
 The top entry is used as the GitHub release notes; keep its version equal to
 `PKG_VERSION` in `Makefile`.
 
+## 2.10.146 (2026-10-10)
+
+TorrServer stays at `MatriX.146`.
+
+### Changed
+
+- **The folder chooser warns about folders the TorrServer user cannot write
+  to.** Such folders are marked "no write access" in the list, and choosing one
+  shows the warning before Save, not after. The message now names the folder
+  and the shared folder that needs the Read/Write permission (for example
+  `/volume1/docker/PlexTorr` and `docker`), so it is clear what to fix in DSM.
+- Folder names in the chooser are never translated (a folder called `Status`
+  stays `Status`).
+- The hint at the top of Settings is now one sentence: click Save, then
+  Restart (all changes need a restart).
+- Internal cleanup of the package scripts (a duplicate variable and an
+  outdated comment removed); behaviour is unchanged.
+
 ## 2.9.146 (2026-10-10)
 
 TorrServer stays at `MatriX.146`.

@@ -67,7 +67,7 @@ class ReadmeTests(unittest.TestCase):
         helper = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(helper)
         self.assertIn("System internal user", README)
-        self.assertIn("System internal user", helper.NOT_WRITABLE)
+        self.assertIn("System internal user", helper.NOT_WRITABLE_C)
 
     def test_sections_a_user_needs_are_top_level(self):
         top_level = re.findall(r"^## (.+)$", README, re.M)

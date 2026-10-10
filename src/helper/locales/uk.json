@@ -26,11 +26,9 @@
   "SPK Project ↗": "Проєкт SPK ↗",
   "♥ Support TorrServer project ↗": "♥ Підтримати проєкт TorrServer ↗",
   "TorrServer Settings": "Налаштування TorrServer",
-  "After changing settings:": "Після зміни налаштувань:",
-  "first click": "спочатку натисніть",
+  "To apply changes, click <b>Save</b>, then <b>Restart</b>.": "Щоб застосувати зміни, натисніть <b>Зберегти</b>, а потім <b>Перезапустити</b>.",
   "Save": "Зберегти",
   "Restart": "Перезапустити",
-  "Some changes require a restart of the TorrServer service to take effect.": "Для застосування деяких змін потрібно перезапустити службу TorrServer.",
   "Web port (HTTP)": "Вебпорт (HTTP)",
   "Browse": "Огляд",
   "Enable HTTPS": "Увімкнути HTTPS",
@@ -119,5 +117,9 @@
   "Create a Task Scheduler task of the type User-defined script. Run it as root, repeat it daily and use this script. It copies the DSM certificate to a folder of your choice and gives the TorrServer user access to it:": "Створіть завдання Task Scheduler типу User-defined script. Запускайте його від імені root, повторюйте щодня й використайте цей скрипт. Він копіює сертифікат DSM у вибрану вами папку та надає користувачу TorrServer доступ до нього:",
   "Then set the certificate and the key on the TorrServer web page to the two files in that folder. TorrServer re-reads them, so a renewed certificate is picked up without a restart.": "Потім на вебсторінці TorrServer вкажіть сертифікат і ключ — два файли з цієї папки. TorrServer перечитує їх сам, тому продовжений сертифікат підхоплюється без перезапуску.",
   "If your certificate is for a domain and is not the default one, put its ID into the script. The IDs are the folder names in /usr/syno/etc/certificate/_archive.": "Якщо ваш сертифікат виданий для домену й не є сертифікатом за замовчуванням, впишіть його ідентифікатор у скрипт. Ідентифікатори — це назви папок у /usr/syno/etc/certificate/_archive.",
-  "The TorrServer service user cannot write to this folder. Give the TorrServer user Read/Write permission on the shared folder (DSM Control Panel → Shared Folder → Edit → Permissions → System internal user).": "У користувача служби TorrServer немає права запису в цю папку. Надайте користувачу TorrServer дозвіл Read/Write на спільну папку (DSM Control Panel → Shared Folder → Edit → Permissions → System internal user)."
+  "The TorrServer service user cannot write to ": "У користувача служби TorrServer немає права запису в ",
+  ". Give the TorrServer user Read/Write permission on the shared folder ": ". Надайте користувачу TorrServer дозвіл Read/Write на спільну папку ",
+  "no write access": "немає прав на запис",
+  " (in DSM: Control Panel → Shared Folder → Edit → Permissions → System internal user).": " (у DSM: Control Panel → Shared Folder → Edit → Permissions → System internal user).",
+  "Select TorrServer directory": "Вибір каталогу TorrServer"
 }

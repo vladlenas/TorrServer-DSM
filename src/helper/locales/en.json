@@ -26,11 +26,9 @@
   "SPK Project ↗": "SPK Project ↗",
   "♥ Support TorrServer project ↗": "♥ Support TorrServer project ↗",
   "TorrServer Settings": "TorrServer Settings",
-  "After changing settings:": "After changing settings:",
-  "first click": "first click",
+  "To apply changes, click <b>Save</b>, then <b>Restart</b>.": "To apply changes, click <b>Save</b>, then <b>Restart</b>.",
   "Save": "Save",
   "Restart": "Restart",
-  "Some changes require a restart of the TorrServer service to take effect.": "Some changes require a restart of the TorrServer service to take effect.",
   "Web port (HTTP)": "Web port (HTTP)",
   "Browse": "Browse",
   "Enable HTTPS": "Enable HTTPS",
@@ -119,5 +117,9 @@
   "Create a Task Scheduler task of the type User-defined script. Run it as root, repeat it daily and use this script. It copies the DSM certificate to a folder of your choice and gives the TorrServer user access to it:": "Create a Task Scheduler task of the type User-defined script. Run it as root, repeat it daily and use this script. It copies the DSM certificate to a folder of your choice and gives the TorrServer user access to it:",
   "Then set the certificate and the key on the TorrServer web page to the two files in that folder. TorrServer re-reads them, so a renewed certificate is picked up without a restart.": "Then set the certificate and the key on the TorrServer web page to the two files in that folder. TorrServer re-reads them, so a renewed certificate is picked up without a restart.",
   "If your certificate is for a domain and is not the default one, put its ID into the script. The IDs are the folder names in /usr/syno/etc/certificate/_archive.": "If your certificate is for a domain and is not the default one, put its ID into the script. The IDs are the folder names in /usr/syno/etc/certificate/_archive.",
-  "The TorrServer service user cannot write to this folder. Give the TorrServer user Read/Write permission on the shared folder (DSM Control Panel → Shared Folder → Edit → Permissions → System internal user).": "The TorrServer service user cannot write to this folder. Give the TorrServer user Read/Write permission on the shared folder (DSM Control Panel → Shared Folder → Edit → Permissions → System internal user)."
+  "The TorrServer service user cannot write to ": "The TorrServer service user cannot write to ",
+  ". Give the TorrServer user Read/Write permission on the shared folder ": ". Give the TorrServer user Read/Write permission on the shared folder ",
+  "no write access": "no write access",
+  " (in DSM: Control Panel → Shared Folder → Edit → Permissions → System internal user).": " (in DSM: Control Panel → Shared Folder → Edit → Permissions → System internal user).",
+  "Select TorrServer directory": "Select TorrServer directory"
 }
