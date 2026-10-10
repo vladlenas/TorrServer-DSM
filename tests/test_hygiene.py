@@ -166,6 +166,13 @@ class ShellHygiene(unittest.TestCase):
 
 
 class RepositoryHygiene(unittest.TestCase):
+    def test_nginx_is_reloaded_by_dsm_when_the_package_is_installed(self):
+        """DSM's nginx-static-config worker never reloads nginx itself: without this
+        INFO line the Helper window shows "page not found" after the first install."""
+        resource = read("src", "conf", "resource")
+        self.assertIn("nginx-static-config", resource)
+        self.assertRegex(read("src", "INFO.sh"), r'(?m)^instuninst_restart_services="nginx\.service"$')
+
     def test_the_package_ships_no_build_artifacts_or_tests(self):
         script = read("build-package.sh")
         self.assertIn("__pycache__", script, "build-package.sh must strip __pycache__ from the package")
