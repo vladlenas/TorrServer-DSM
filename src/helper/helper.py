@@ -755,11 +755,23 @@ def get_torrserver_uptime():
         return "Unknown"
 
 
-NOT_WRITABLE = (
-    "The TorrServer service user cannot write to this folder. Give the TorrServer "
-    "user Read/Write permission on the shared folder (DSM Control Panel → Shared "
-    "Folder → Edit → Permissions → System internal user)."
-)
+# The message is built from three fixed sentences around the folder and the
+# share, so that each part has its own translation and the user sees which
+# shared folder needs the permission.
+NOT_WRITABLE_A = "The TorrServer service user cannot write to "
+NOT_WRITABLE_B = ". Give the TorrServer user Read/Write permission on the shared folder "
+NOT_WRITABLE_C = " (in DSM: Control Panel → Shared Folder → Edit → Permissions → System internal user)."
+
+
+def share_of(path):
+    """/volume1/docker/PlexTorr -> docker (the shared folder that holds it)."""
+    parts = [p for p in path.split("/") if p]
+    return parts[1] if len(parts) >= 2 else (parts[0] if parts else path)
+
+
+def not_writable_message(path):
+    return NOT_WRITABLE_A + path + NOT_WRITABLE_B + share_of(path) + NOT_WRITABLE_C
+
 
 SUBDIRECTORIES = ("Cache", "FUSE")
 
@@ -814,7 +826,7 @@ def prepare_torrserver_directory(torrserver_dir):
     except ValueError as e:
         return False, str(e)
 
-    return False, NOT_WRITABLE
+    return False, not_writable_message(torrserver_dir)
 
 
 def restart_torrserver():
@@ -1524,6 +1536,16 @@ button.danger:disabled,
     .media-grid {{
         grid-template-columns: 1fr;
     }}
+}}
+
+.browse-denied {{
+    float: right;
+    padding: 1px 9px;
+    border-radius: 10px;
+    background: #fef3c7;
+    color: #92400e;
+    font-size: 12px;
+    font-weight: 600;
 }}
 
 .ssl-manual h4 {{
@@ -2567,12 +2589,9 @@ def settings_page(message="", torrserver_dir_override=""):
 {language_selector}
 
 <div class="notice">
-<strong>After changing settings:</strong> first click <b>Save</b>.
-<br>
-{}
+To apply changes, click <b>Save</b>, then <b>Restart</b>.
 </div>
 """.format(
-        "Some changes require a restart of the TorrServer service to take effect.",
         sidebar=app_sidebar("settings"),
         language_selector=language_selector(),
     )
@@ -2817,11 +2836,14 @@ def cache_browser_page(path, target="cache"):
     rows = []
     for name in names:
         child = os.path.join(path, name) if path != "/" else os.path.join("/", name)
-        label = html.escape(name)
+        # Folder names are the user's own text and are never translated.
+        label = '<span translate="no">{}/</span>'.format(html.escape(name))
+        if path != "/" and not os.access(child, os.W_OK | os.X_OK):
+            label += ' <span class="browse-denied">no write access</span>'
         rows.append(
             '<div style="margin:6px 0;">'
             '<a class="button secondary" style="width:100%;box-sizing:border-box;text-align:left;" '
-            'href="./browse?path={}&target={}">{}/</a>'
+            'href="./browse?path={}&target={}">{}</a>'
             '</div>'.format(
                 quote(child, safe=""),
                 quote(target, safe=""),
@@ -2849,11 +2871,24 @@ def cache_browser_page(path, target="cache"):
         select_href = "./settings?cache_path={}".format(quote(path, safe=""))
         page_title = "Select cache directory"
 
+    # A folder the TorrServer user cannot write to is chosen anyway only by
+    # mistake: say so here, before Save, and name the shared folder to fix.
+    warning = ""
+    if path != "/" and not os.access(path, os.W_OK | os.X_OK):
+        warning = '<div class="notice">{}{}{}{}{}</div>'.format(
+            NOT_WRITABLE_A,
+            '<span translate="no">{}</span>'.format(html.escape(path)),
+            NOT_WRITABLE_B,
+            '<span translate="no">{}</span>'.format(html.escape(share_of(path))),
+            NOT_WRITABLE_C,
+        )
+
     body = page_header(page_title)
     body += """
 <div class="card">
 <h1>{}</h1>
 <p><b>Current:</b> <code>{}</code></p>
+{warning}
 <div style="margin-bottom:15px;">
 {}
 </div>
@@ -2870,6 +2905,7 @@ def cache_browser_page(path, target="cache"):
         parent_html,
         select_href,
         "".join(rows),
+        warning=warning,
     )
 
     body += page_footer()

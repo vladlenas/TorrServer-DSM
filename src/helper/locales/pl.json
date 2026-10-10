@@ -26,11 +26,9 @@
   "SPK Project ↗": "Projekt SPK ↗",
   "♥ Support TorrServer project ↗": "♥ Wesprzyj projekt TorrServer ↗",
   "TorrServer Settings": "Ustawienia TorrServer",
-  "After changing settings:": "Po zmianie ustawień:",
-  "first click": "najpierw kliknij",
+  "To apply changes, click <b>Save</b>, then <b>Restart</b>.": "Aby zastosować zmiany, kliknij <b>Zapisz</b>, a następnie <b>Uruchom ponownie</b>.",
   "Save": "Zapisz",
   "Restart": "Uruchom ponownie",
-  "Some changes require a restart of the TorrServer service to take effect.": "Niektóre zmiany wymagają ponownego uruchomienia usługi TorrServer.",
   "Web port (HTTP)": "Port WWW (HTTP)",
   "Browse": "Przeglądaj",
   "Enable HTTPS": "Włącz HTTPS",
@@ -119,5 +117,9 @@
   "Create a Task Scheduler task of the type User-defined script. Run it as root, repeat it daily and use this script. It copies the DSM certificate to a folder of your choice and gives the TorrServer user access to it:": "Utwórz w Harmonogramie zadań zadanie typu Skrypt zdefiniowany przez użytkownika. Uruchamiaj je jako root, powtarzaj codziennie i użyj tego skryptu. Kopiuje on certyfikat DSM do wybranego przez Ciebie folderu i nadaje użytkownikowi TorrServer dostęp do niego:",
   "Then set the certificate and the key on the TorrServer web page to the two files in that folder. TorrServer re-reads them, so a renewed certificate is picked up without a restart.": "Następnie na stronie internetowej TorrServer ustaw certyfikat i klucz na dwa pliki z tego folderu. TorrServer odczytuje je ponownie sam, więc odnowiony certyfikat jest wykrywany bez restartu.",
   "If your certificate is for a domain and is not the default one, put its ID into the script. The IDs are the folder names in /usr/syno/etc/certificate/_archive.": "Jeśli certyfikat jest wystawiony dla domeny i nie jest domyślny, wpisz jego identyfikator w skrypcie. Identyfikatory to nazwy folderów w /usr/syno/etc/certificate/_archive.",
-  "The TorrServer service user cannot write to this folder. Give the TorrServer user Read/Write permission on the shared folder (DSM Control Panel → Shared Folder → Edit → Permissions → System internal user).": "Użytkownik usługi TorrServer nie ma uprawnień do zapisu w tym folderze. Nadaj użytkownikowi TorrServer uprawnienie „Odczyt/Zapis” do folderu współdzielonego (Panel sterowania DSM → Folder współdzielony → Edytuj → Uprawnienia → Wewnętrzny użytkownik systemu)."
+  "The TorrServer service user cannot write to ": "Użytkownik usługi TorrServer nie ma uprawnień do zapisu w ",
+  ". Give the TorrServer user Read/Write permission on the shared folder ": ". Nadaj użytkownikowi TorrServer uprawnienie „Odczyt/Zapis” do folderu współdzielonego ",
+  "no write access": "brak uprawnień do zapisu",
+  " (in DSM: Control Panel → Shared Folder → Edit → Permissions → System internal user).": " (w DSM: Panel sterowania → Folder współdzielony → Edytuj → Uprawnienia → Wewnętrzny użytkownik systemu).",
+  "Select TorrServer directory": "Wybierz katalog TorrServer"
 }

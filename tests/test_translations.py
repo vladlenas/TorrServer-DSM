@@ -68,7 +68,7 @@ NOT_SHOWN = {"", "no session cookie", "TorrServer is not running", "Settings sav
 INSTRUCTIONS = [
     "Option 2: Task Scheduler",
     "Create a Task Scheduler task of the type User-defined script. Run it as root, repeat it daily and use this script. It copies the DSM certificate to a folder of your choice and gives the TorrServer user access to it:",
-    h.NOT_WRITABLE,
+    h.NOT_WRITABLE_C,
 ]
 # These names are unmistakably DSM screens: a message that uses them must be listed above.
 UNMISTAKABLE = ("Task Scheduler", "Control Panel", "Shared Folder", "Package Center")
@@ -153,7 +153,8 @@ class MessagesAreTranslated(unittest.TestCase):
                 if any(t.endswith("_PORT_ERRORS") for t in targets):
                     for element in node.value.elts:
                         add(element.value)
-        add(h.NOT_WRITABLE)
+        for part in (h.NOT_WRITABLE_A, h.NOT_WRITABLE_B, h.NOT_WRITABLE_C, "no write access"):
+            add(part)
 
         return messages
 
@@ -263,7 +264,7 @@ class NoMixedLanguages(unittest.TestCase):
         problems = []
         for lang in LANGS:
             h.write_file(h.LANGUAGE_FILE, lang)
-            for text in (h.NOT_WRITABLE,
+            for text in (h.not_writable_message("/volume1/ab"),
                          "Create a Task Scheduler task of the type User-defined script. Run it as root, repeat it daily and use this script. It copies the DSM certificate to a folder of your choice and gives the TorrServer user access to it:"):
                 shown = h.localize_html("<p>%s</p>" % html.escape(text))
                 left = self.leftovers(lang, shown, text)

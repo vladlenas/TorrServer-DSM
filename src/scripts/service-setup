@@ -20,9 +20,9 @@ CONFIG_SCHEMA=5
 
 CONFIG_DIR="${SYNOPKG_PKGVAR:-/var/packages/${SYNOPKG_PKGNAME}/var}"
 # One log for everything: TorrServer writes to it itself (-l, append mode), and
-# the start/stop/restart scripts and the Helper append to it too. Nothing truncates it; the Helper rotates it by size.
+# the start/stop/restart scripts and the Helper append to it too. Nothing
+# truncates it; the Helper rotates it by size.
 LOG_FILE="${CONFIG_DIR}/TorrServer.log"
-TORRSERVER_LOG="${LOG_FILE}"
 PID_FILE="${CONFIG_DIR}/${SYNOPKG_PKGNAME}.pid"
 SCHEMA_FILE="${CONFIG_DIR}/config.schema"
 
@@ -107,7 +107,7 @@ for _py in ${PYTHON_CANDIDATES:-/bin/python3 /usr/bin/python3 /usr/local/bin/pyt
 done
 
 HELPER_COMMAND="${PYTHON_BIN:-/bin/python3} ${SYNOPKG_PKGDEST}/helper/helper.py"
-TORRSERVER_COMMAND="${SYNOPKG_PKGDEST}/bin/TorrServer -d ${SYNOPKG_PKGVAR} -p ${TORRSERVER_PORT} ${AUTH_ARGS} ${SSL_ARGS} ${FUSE_ARGS} -l ${TORRSERVER_LOG}"
+TORRSERVER_COMMAND="${SYNOPKG_PKGDEST}/bin/TorrServer -d ${SYNOPKG_PKGVAR} -p ${TORRSERVER_PORT} ${AUTH_ARGS} ${SSL_ARGS} ${FUSE_ARGS} -l ${LOG_FILE}"
 
 # One command per line; the helper must stay first (its pid is the first one
 # in the pid file, and restart-torrserver keeps it).

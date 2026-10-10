@@ -342,7 +342,7 @@ echo "== service-setup: command line"
 setup_var self; echo 1 > "$VAR/torrserver.auth"; echo '{"u":"p"}' > "$VAR/accs.db"
 out="$(run_setup 'echo "$SERVICE_COMMAND"')"
 check "auth flag passed"                    sh -c "echo '$out' | grep -q ' -a '"
-check "one log for everything"              run_setup '[ "$LOG_FILE" = "$TORRSERVER_LOG" ] && [ "${LOG_FILE##*/}" = TorrServer.log ]'
+check "one log for everything"              run_setup '[ "${LOG_FILE##*/}" = TorrServer.log ]'
 
 echo "== service-setup: which Python runs the Helper"
 setup_var self; mkdir -p "$TMP/py/Python3.9/target/usr/bin"

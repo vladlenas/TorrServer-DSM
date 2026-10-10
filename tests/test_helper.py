@@ -260,9 +260,9 @@ class SaveSettingsTests(Base):
             self.assertEqual(open(os.path.join(VAR, name)).read(), "user supplied")
 
     def test_a_directory_the_service_user_cannot_write_is_explained(self):
-        h.prepare_torrserver_directory = lambda d: (False, h.NOT_WRITABLE)
+        h.prepare_torrserver_directory = lambda d: (False, h.not_writable_message(d))
         ok, message = self.save()
-        self.assertEqual((ok, message), (False, h.NOT_WRITABLE))
+        self.assertEqual((ok, message), (False, h.not_writable_message("/volume1/TS")))
         self.assertFalse(os.path.exists(h.PORT_FILE))
 
     def test_saves_when_torrserver_is_down(self):
@@ -313,7 +313,8 @@ class DirectoryTests(Base):
         self.deny_creation()
         ok, message = h.prepare_torrserver_directory(self.base)
         self.assertFalse(ok)
-        self.assertEqual(message, h.NOT_WRITABLE)
+        self.assertEqual(message, h.not_writable_message(self.base))
+        self.assertIn(self.base, message, "the message names the folder")
         self.assertIn("System internal user", message)
         self.assertNotIn("setup-permissions", message)
         self.assertEqual(self.sudo_calls, [], "never call sudo")
@@ -322,7 +323,7 @@ class DirectoryTests(Base):
         for name in ("Cache", "FUSE"):
             os.mkdir(os.path.join(self.base, name))
         os.access = lambda path, mode: False
-        self.assertEqual(h.prepare_torrserver_directory(self.base), (False, h.NOT_WRITABLE))
+        self.assertEqual(h.prepare_torrserver_directory(self.base), (False, h.not_writable_message(self.base)))
         self.assertEqual(self.sudo_calls, [])
 
     def test_symlinks_are_refused(self):
@@ -355,6 +356,62 @@ class DirectoryTests(Base):
             raise FileExistsError(17, "File exists", path)
         os.mkdir = racing
         self.assertEqual(h.prepare_torrserver_directory(self.base), (True, ""))
+
+
+class FolderAccessMessageTests(Base):
+    def test_the_message_names_the_folder_and_the_share_to_fix(self):
+        message = h.not_writable_message("/volume1/docker/PlexTorr")
+        self.assertIn("/volume1/docker/PlexTorr", message)
+        self.assertIn("shared folder docker (", message)
+        self.assertIn("System internal user", message)
+
+    def test_the_share_is_the_first_folder_below_the_volume(self):
+        self.assertEqual(h.share_of("/volume2/media/a/b"), "media")
+        self.assertEqual(h.share_of("/volume1/docker"), "docker")
+        self.assertEqual(h.share_of("/volume1"), "volume1")
+
+
+class BrowseAccessTests(Base):
+    """The folder chooser says so before Save when the TorrServer user has no write access."""
+
+    def setUp(self):
+        super().setUp()
+        self.base = tempfile.mkdtemp(prefix="volume1-")
+        self.addCleanup(shutil.rmtree, self.base, True)
+        os.mkdir(os.path.join(self.base, "open"))
+        os.mkdir(os.path.join(self.base, "locked"))
+        self.denied = set()
+        self.real = (os.access, h.cache_browser_path)
+        self.addCleanup(lambda: (setattr(os, "access", self.real[0]), setattr(h, "cache_browser_path", self.real[1])))
+        h.cache_browser_path = lambda p: p if p else "/"
+        os.access = lambda p, mode, **kw: p not in self.denied and self.real[0](p, mode, **kw)
+
+    def test_a_folder_without_write_access_is_marked_in_the_list(self):
+        self.denied = {os.path.join(self.base, "locked")}
+        page = h.cache_browser_page(self.base, "torrserver")
+        row_locked = page[page.index(">locked/<"):page.index("</a>", page.index(">locked/<"))]
+        row_open = page[page.index(">open/<"):page.index("</a>", page.index(">open/<"))]
+        self.assertIn("no write access", row_locked)
+        self.assertNotIn("no write access", row_open)
+
+    def test_choosing_such_a_folder_warns_before_save_and_names_the_share(self):
+        locked = os.path.join(self.base, "locked")
+        self.denied = {locked}
+        page = h.cache_browser_page(locked, "torrserver")
+        self.assertIn(h.NOT_WRITABLE_A, page)
+        self.assertIn(h.NOT_WRITABLE_C, page)
+        self.assertIn(locked, page)
+        self.assertIn(h.share_of(locked), page)
+
+    def test_a_writable_folder_has_no_warning(self):
+        page = h.cache_browser_page(os.path.join(self.base, "open"), "torrserver")
+        self.assertNotIn(h.NOT_WRITABLE_A, page)
+        self.assertNotIn("no write access", page)
+
+    def test_folder_names_are_never_translated(self):
+        os.mkdir(os.path.join(self.base, "Status"))
+        h.write_file(h.LANGUAGE_FILE, "ru")
+        self.assertIn(">Status/<", h.cache_browser_page(self.base, "torrserver"))
 
 
 class FormTests(Base):

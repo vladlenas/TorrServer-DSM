@@ -26,11 +26,9 @@
   "SPK Project ↗": "SPK projektas ↗",
   "♥ Support TorrServer project ↗": "♥ Paremti TorrServer projektą ↗",
   "TorrServer Settings": "TorrServer nustatymai",
-  "After changing settings:": "Pakeitus nustatymus:",
-  "first click": "pirmiausia spauskite",
+  "To apply changes, click <b>Save</b>, then <b>Restart</b>.": "Norėdami pritaikyti pakeitimus, spustelėkite <b>Išsaugoti</b>, tada <b>Paleisti iš naujo</b>.",
   "Save": "Išsaugoti",
   "Restart": "Paleisti iš naujo",
-  "Some changes require a restart of the TorrServer service to take effect.": "Kad kai kurie pakeitimai įsigaliotų, reikia iš naujo paleisti TorrServer tarnybą.",
   "Web port (HTTP)": "Žiniatinklio prievadas (HTTP)",
   "Browse": "Naršyti",
   "Enable HTTPS": "Įjungti HTTPS",
@@ -119,5 +117,9 @@
   "Create a Task Scheduler task of the type User-defined script. Run it as root, repeat it daily and use this script. It copies the DSM certificate to a folder of your choice and gives the TorrServer user access to it:": "Sukurkite Task Scheduler užduotį, kurios tipas User-defined script. Paleiskite ją kaip root, kartokite kasdien ir naudokite šį scenarijų. Jis nukopijuoja DSM sertifikatą į jūsų pasirinktą aplanką ir suteikia TorrServer naudotojui prieigą prie jo:",
   "Then set the certificate and the key on the TorrServer web page to the two files in that folder. TorrServer re-reads them, so a renewed certificate is picked up without a restart.": "Tada TorrServer tinklalapyje nurodykite sertifikatą ir raktą – du failus iš to aplanko. TorrServer juos perskaito pats, todėl atnaujintas sertifikatas pastebimas be paleidimo iš naujo.",
   "If your certificate is for a domain and is not the default one, put its ID into the script. The IDs are the folder names in /usr/syno/etc/certificate/_archive.": "Jei sertifikatas išduotas domenui ir nėra numatytasis, įrašykite jo ID į scenarijų. ID – tai aplankų pavadinimai /usr/syno/etc/certificate/_archive.",
-  "The TorrServer service user cannot write to this folder. Give the TorrServer user Read/Write permission on the shared folder (DSM Control Panel → Shared Folder → Edit → Permissions → System internal user).": "TorrServer paslaugos naudotojas negali rašyti į šį aplanką. Suteikite naudotojui TorrServer teisę Read/Write bendrinamam aplankui (DSM Control Panel → Shared Folder → Edit → Permissions → System internal user)."
+  "The TorrServer service user cannot write to ": "TorrServer paslaugos naudotojas negali rašyti į ",
+  ". Give the TorrServer user Read/Write permission on the shared folder ": ". Suteikite naudotojui TorrServer teisę Read/Write bendrinamam aplankui ",
+  "no write access": "nėra rašymo teisių",
+  " (in DSM: Control Panel → Shared Folder → Edit → Permissions → System internal user).": " (DSM: Control Panel → Shared Folder → Edit → Permissions → System internal user).",
+  "Select TorrServer directory": "Pasirinkti TorrServer katalogą"
 }
