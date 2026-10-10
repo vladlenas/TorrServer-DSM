@@ -106,8 +106,6 @@ class TranslationHygiene(unittest.TestCase):
     def test_every_translation_key_is_used_somewhere(self):
         constants = " ".join(
             n.value for n in ast.walk(TREE) if isinstance(n, ast.Constant) and isinstance(n.value, str))
-        # prepare-directory prints messages that the Helper shows to the user as they are
-        constants += " " + read("src", "scripts", "prepare-directory")
         plain = lambda text: re.sub(r"<[^>]+>", "", text)
         for lang in ("en", "ru", "uk", "lt", "pl"):
             keys = json.loads(read("src", "helper", "locales", lang + ".json"))

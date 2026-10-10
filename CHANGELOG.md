@@ -3,6 +3,42 @@
 The top entry is used as the GitHub release notes; keep its version equal to
 `PKG_VERSION` in `Makefile`.
 
+## 2.8.146 (2026-10-09)
+
+TorrServer stays at `MatriX.146`.
+
+### Changed
+
+- **Nothing in the package runs as root any more.** The package works the way
+  DSM intends: with the reduced rights of its own `TorrServer` user. The
+  scripts `certificate-helper`, `prepare-directory` and `setup-permissions`
+  and the sudo rule are gone, and so is everything in the Helper that depended
+  on them (permission check, **Check permissions** button, root fallback for
+  folders). A folder the service user cannot write to is fixed the standard DSM
+  way (Control Panel, Shared Folder, Edit, Permissions, System internal user),
+  as the Helper explains.
+- **The SSL Certificate card is a manual.** The certificate source choice
+  (self-signed, DSM certificate, manual paths) is removed: the certificate is
+  set on TorrServer's own page (**Settings, Additional, HTTPS**). The card
+  explains the manual upload and two ways to keep the certificate renewed:
+  a DSM reverse proxy, or a Task Scheduler task with a ready script that copies
+  the DSM certificate to a folder TorrServer can read. The README describes
+  both in detail.
+
+- **Package description.** Package Center now shows a short description of
+  TorrServer's main features (English, Russian and Polish) instead of
+  "TorrServer, torrent to http.".
+
+### Upgrading
+
+- A `server.pem` / `server.key` copied by an earlier version stays and keeps
+  working, but nothing renews it any more. Move to a reverse proxy or the
+  Task Scheduler script before it expires.
+- The old sudo rule is left behind because the package cannot remove it
+  without root. Delete it once: `sudo rm -f /etc/sudoers.d/TorrServer`.
+- The settings files `torrserver.ssl.mode`, `torrserver.ssl.cert` and
+  `torrserver.ssl.key` are removed on upgrade.
+
 ## 2.7.146 (2026-10-09)
 
 TorrServer stays at `MatriX.146`.

@@ -14,17 +14,16 @@ fi
 # History: 2 = first migration (but postinst recorded it before the migration
 # ran, so upgrades skipped the cleanup); 3 = the migration really runs, and
 # also repairs installations that were marked 2 without being cleaned;
-# 4 = one log file (TorrServer.log) instead of service.log / Helper.log.
-CONFIG_SCHEMA=4
+# 4 = one log file (TorrServer.log) instead of service.log / Helper.log;
+# 5 = no root helpers any more: the certificate source files are gone.
+CONFIG_SCHEMA=5
 
 CONFIG_DIR="${SYNOPKG_PKGVAR:-/var/packages/${SYNOPKG_PKGNAME}/var}"
 # One log for everything: TorrServer writes to it itself (-l, append mode), and
-# the start/stop/restart scripts, the Helper and certificate-helper append to
-# it too. Nothing truncates it; the Helper rotates it by size.
+# the start/stop/restart scripts and the Helper append to it too. Nothing truncates it; the Helper rotates it by size.
 LOG_FILE="${CONFIG_DIR}/TorrServer.log"
 TORRSERVER_LOG="${LOG_FILE}"
 PID_FILE="${CONFIG_DIR}/${SYNOPKG_PKGNAME}.pid"
-CERTIFICATE_HELPER="/var/packages/${SYNOPKG_PKGNAME}/scripts/certificate-helper"
 SCHEMA_FILE="${CONFIG_DIR}/config.schema"
 
 # service_log SOURCE MESSAGE: one line in TorrServer's own format
@@ -209,14 +208,6 @@ service_prestart()
     if [ -d "${SYNOPKG_PKGDEST}/ui" ]; then
         update_firewall_port
     fi
-
-    if [ -x "${CERTIFICATE_HELPER}" ]; then
-        # sudo's own "a password is required" is dropped: it only repeats the
-        # warning below. certificate-helper logs its real errors to the log.
-        if ! /bin/sudo -n "${CERTIFICATE_HELPER}" sync 2>/dev/null; then
-            service_log service "Warning: TLS certificate synchronization is unavailable. Configure DSM permissions if required."
-        fi
-    fi
 }
 
 # Files created by earlier package versions and no longer used.
@@ -224,8 +215,8 @@ OBSOLETE_VAR_FILES="torrserver.fuse.path cache.path"
 
 # Files holding package settings (not TorrServer's own database/torrents).
 SETTINGS_VAR_FILES="torrserver.port torrserver.auth accs.db torrserver.dir torrserver.fuse
-torrserver.https torrserver.https.port torrserver.force.https torrserver.ssl.mode
-torrserver.ssl.cert torrserver.ssl.key cache.pending helper.language"
+torrserver.https torrserver.https.port torrserver.force.https cache.pending
+helper.language"
 
 remove_var_file()
 {
@@ -237,11 +228,6 @@ reset_settings()
     for f in ${SETTINGS_VAR_FILES}; do
         remove_var_file "${f}"
     done
-
-    # Certificates copied by certificate-helper; TorrServer will create its
-    # own self-signed pair again.
-    remove_var_file server.pem
-    remove_var_file server.key
 }
 
 migrate_config()
@@ -283,6 +269,13 @@ migrate_config()
                 remove_var_file server.key
                 ;;
         esac
+
+        # Version 2.8 has no root helpers and no certificate source setting.
+        # A server.pem/server.key copied earlier stays and keeps working, but
+        # nothing renews it any more.
+        for f in torrserver.ssl.mode torrserver.ssl.cert torrserver.ssl.key; do
+            remove_var_file "${f}"
+        done
 
         # A pid file surviving an upgrade is always stale (service is stopped).
         remove_var_file "${SYNOPKG_PKGNAME}.pid"
