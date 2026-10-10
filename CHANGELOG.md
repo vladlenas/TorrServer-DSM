@@ -3,6 +3,20 @@
 The top entry is used as the GitHub release notes; keep its version equal to
 `PKG_VERSION` in `Makefile`.
 
+## 2.9.146 (2026-10-10)
+
+TorrServer stays at `MatriX.146`.
+
+### Fixed
+
+- **The Helper window said "Sorry, the page you are looking for is not found"
+  after the first install** (seen on DSM 7.3.2 and 7.4.1). DSM links the
+  package's nginx rule but, as its documentation says, does not reload nginx
+  by itself. The package now declares `instuninst_restart_services =
+  nginx.service` in its `INFO`, the way DSM provides for this, so DSM reloads
+  nginx when the package is installed or removed. No root script is involved.
+  If you already hit it, run `sudo synosystemctl reload nginx` once.
+
 ## 2.8.146 (2026-10-09)
 
 TorrServer stays at `MatriX.146`.
