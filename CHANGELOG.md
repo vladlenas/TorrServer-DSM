@@ -19,6 +19,8 @@ TorrServer stays at `MatriX.146`.
 
 ### Changed
 
+- **New package icon:** the TorrServer plate in the Synology style, in the
+  Package Center and in the Helper's window icons.
 - **FUSE recommendations for Plex rewritten.** They now list every Plex setting
   that reads the virtual files in full (video preview and chapter thumbnails,
   intro and credits markers, loudness analysis, extensive media analysis during
