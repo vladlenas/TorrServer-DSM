@@ -739,8 +739,8 @@ def normalize_plex_sections(value):
 
 
 def get_plex_settings():
-    """The Plex scan settings. ``active`` is true only when everything the scan
-    needs is there: FUSE on, the option on, a token and a library ID."""
+    """The Plex scan settings. ``active`` means FUSE and the option are on. The
+    library IDs are optional: without them every library is scanned."""
     url = normalize_plex_url(read_file(PLEX_URL_FILE, PLEX_DEFAULT_URL)) or PLEX_DEFAULT_URL
     token = read_file(PLEX_TOKEN_FILE, "")
     section = read_file(PLEX_SECTION_FILE, "")
@@ -750,7 +750,7 @@ def get_plex_settings():
         "url": url,
         "token": token,
         "section": section,
-        "active": bool(scan and token and section),
+        "active": bool(scan and token),
     }
 
 
@@ -1354,9 +1354,10 @@ def save_settings(params):
         if not plex_url:
             return False, "Plex address must look like http://127.0.0.1:32400"
 
-        plex_section = normalize_plex_sections(plex_section)
-        if not plex_section:
-            return False, "Plex library IDs must be numbers separated by commas"
+        if plex_section:
+            plex_section = normalize_plex_sections(plex_section)
+            if not plex_section:
+                return False, "Plex library IDs must be numbers separated by commas"
 
         if plex_token == PASSWORD_PLACEHOLDER or not plex_token:
             plex_token = read_file(PLEX_TOKEN_FILE, "")
@@ -1369,7 +1370,7 @@ def save_settings(params):
 
         # A wrong token or library ID would fail silently later: ask Plex now.
         # If Plex is simply not reachable the settings are still saved.
-        for section in plex_section.split(","):
+        for section in (plex_section.split(",") if plex_section else [""]):
             state, plex_message = plex_check(plex_url, plex_token, section)
             if state == "bad":
                 return False, plex_message
@@ -1629,11 +1630,28 @@ button.danger:disabled,
     color: #30415e;
 }}
 
-.media-grid {{
-    display: grid;
-    grid-template-columns: 1fr 1fr;
-    gap: 18px;
+.media-hint[open] > summary {{
+    margin-bottom: 10px;
+}}
+
+.media-sub {{
     margin-top: 10px;
+}}
+
+.media-sub summary {{
+    cursor: pointer;
+    font-weight: 600;
+    color: #30415e;
+}}
+
+.media-sub ul {{
+    margin: 6px 0 0;
+    padding-left: 18px;
+    color: #40536f;
+}}
+
+.media-sub li {{
+    margin-bottom: 4px;
 }}
 
 .media-hint ul {{
@@ -1644,12 +1662,6 @@ button.danger:disabled,
 
 .media-hint li {{
     margin-bottom: 4px;
-}}
-
-@media (max-width: 800px) {{
-    .media-grid {{
-        grid-template-columns: 1fr;
-    }}
 }}
 
 .browse-denied {{
@@ -2663,13 +2675,9 @@ done
 
 # Information only: nothing here is a form field. Every paragraph is a single
 # line so that it is found as one key in the locale files.
-SSL_CARD = """
-<div class="settings-card">
-    <div class="settings-card-title">
-        <span class="metric-icon" data-icon="shield"></span>
-        <span>SSL Certificate</span>
-    </div>
-    <div class="settings-card-body ssl-manual">
+SSL_BLOCK = """
+<details class="media-hint ssl-manual">
+    <summary>SSL certificate instructions</summary>
 
         <p>The HTTPS certificate is set on the TorrServer web page. The package runs with the limited rights that DSM gives it, so it does not read or copy DSM certificates itself.</p>
 
@@ -2686,13 +2694,15 @@ SSL_CARD = """
         <p>Then set the certificate and the key on the TorrServer web page to the two files in that folder. TorrServer re-reads them, so a renewed certificate is picked up without a restart.</p>
         <p>If your certificate is for a domain and is not the default one, put its ID into the script. The IDs are the folder names in /usr/syno/etc/certificate/_archive.</p>
 
-    </div>
-</div>
+</details>
 """.replace("__SCRIPT__", html.escape(SSL_SCRIPT.strip("\n")))
 
 
-PLEX_SCAN_BLOCK = """
-<div class="plex-scan" style="margin-top:12px;">
+PLEX_BLOCK = """
+<div id="fuseHint">
+    <details class="media-hint">
+        <summary>Using FUSE with Plex</summary>
+
     <div class="checkbox-row">
         <label>
             <input type="checkbox" name="plex_scan" value="1" __CHECKED__ onchange="togglePlex()">
@@ -2717,18 +2727,42 @@ PLEX_SCAN_BLOCK = """
         </div>
 
         <div class="help" style="grid-column:2">
-            The library ID is the number after source= in the address of the library in Plex Web. For several libraries (for example movies and series) separate the numbers with commas: 6,7. The scan only reads folder names and does not download any torrent data.
+            Leave the library IDs empty to scan every library. For particular libraries (for example movies and series) write the numbers after source= in the library address in Plex Web, separated by commas: 6,7. The scan only reads folder names and does not download any torrent data.
         </div>
     </div>
+
+    <details class="media-sub">
+        <summary>Plex settings that stop Plex from downloading your torrents</summary>
+        <ul>
+            <li>FUSE can be used as a media library source for Plex.</li>
+            <li>Keep <b>“Show only active torrents”</b> disabled so Plex can see the library without starting torrents.</li>
+            <li>In Plex open <b>Settings → Library</b> and set <b>Generate video preview thumbnails</b>, <b>Generate chapter thumbnails</b>, <b>Generate intro video markers</b>, <b>Generate credits video markers</b> and <b>Analyze audio tracks for loudness</b> to <b>Never</b>.</li>
+            <li>In <b>Settings → Scheduled Tasks</b> turn off <b>Perform extensive media analysis during maintenance</b>.</li>
+            <li>In <b>Settings → Library</b> turn off <b>Empty trash automatically after every scan</b>, so a scan that runs while the FUSE folder is empty cannot delete items together with their watch progress.</li>
+        </ul>
+        <div class="help">
+            Normal library scanning can remain enabled. Background analysis and thumbnail generation may read large virtual files and cause significant CPU, network and storage load. The names of the Plex settings can differ slightly between Plex versions.
+        </div>
+    </details>
+
+    <details class="media-sub">
+        <summary>Where to find the Plex token and the library IDs</summary>
+        <ul>
+            <li><b>Token:</b> in Plex Web open any item, click the three dots, choose Get Info, then View XML. The address of the XML page contains X-Plex-Token=... : that is the token.</li>
+            <li><b>Library IDs:</b> open the library in Plex Web. The number after source= in the address is its ID. Another way: open http://PLEX-ADDRESS:32400/library/sections?X-Plex-Token=TOKEN in a browser. Every library has key="..." and title="...".</li>
+            <li>Several libraries, for example movies and series: 6,7. Empty: all libraries.</li>
+        </ul>
+    </details>
+    </details>
 </div>
 """
 
 
-def plex_scan_block():
+def plex_block():
     settings = get_plex_settings()
     saved = read_file(PLEX_SCAN_FILE, "0") == "1"
     return (
-        PLEX_SCAN_BLOCK
+        PLEX_BLOCK
         .replace("__CHECKED__", "checked" if saved else "")
         .replace("__URL__", html.escape(settings["url"], quote=True))
         .replace("__TOKEN__", html.escape(PASSWORD_PLACEHOLDER if settings["token"] else "", quote=True))
@@ -2808,37 +2842,7 @@ To apply changes, click <b>Save</b>, then <b>Restart</b>.
             </label>
         </div>
 
-        <div id="fuseHint" class="media-hint">
-            <details>
-                <summary>Using FUSE with Plex or Emby</summary>
-
-                <div class="media-grid">
-                    <div>
-                        <strong>Plex</strong>
-                        <ul>
-                            <li>FUSE can be used as a media library source for Plex.</li>
-                            <li>Keep <b>“Show only active torrents”</b> disabled so Plex can see the library without starting torrents.</li>
-                            <li>In Plex open <b>Settings → Library</b> and set <b>Generate video preview thumbnails</b>, <b>Generate chapter thumbnails</b>, <b>Generate intro video markers</b>, <b>Generate credits video markers</b> and <b>Analyze audio tracks for loudness</b> to <b>Never</b>.</li>
-                            <li>In <b>Settings → Scheduled Tasks</b> turn off <b>Perform extensive media analysis during maintenance</b>.</li>
-                            <li>In <b>Settings → Library</b> turn off <b>Empty trash automatically after every scan</b>, so a scan that runs while the FUSE folder is empty cannot delete items together with their watch progress.</li>
-                        </ul>
-                    </div>
-                    <div>
-                        <strong>Emby</strong>
-                        <ul>
-                            <li>FUSE can be used as a media library source for Emby.</li>
-                            <li>Background task behavior with TorrServer FUSE has not been tested in this version.</li>
-                        </ul>
-                    </div>
-                </div>
-
-                <div class="help">
-                    Normal library scanning can remain enabled. Background analysis and thumbnail generation may read large virtual files and cause significant CPU, network and storage load. The names of the Plex settings can differ slightly between Plex versions.
-                </div>
-            </details>
-
-            {plex_scan_block}
-        </div>
+{plex_block}
 
     </div>
 </div>
@@ -2891,6 +2895,8 @@ To apply changes, click <b>Save</b>, then <b>Restart</b>.
             Nothing is served over plain HTTP any more, not even a redirect, so no request or password can leave the NAS unencrypted. Use it with a trusted certificate: with the self-signed one, players and TVs will not play.
         </div>
 
+{ssl_block}
+
     </div>
 </div>
 
@@ -2904,7 +2910,6 @@ To apply changes, click <b>Save</b>, then <b>Restart</b>.
 </fieldset>
 </form>
 
-{ssl_card}
 </div>
 
 <script>
@@ -2996,8 +3001,8 @@ if (passwordField) {{
 
 toggleHttps();
 toggleAuth();
-toggleFuseHint();
 togglePlex();
+toggleFuseHint();
 </script>
 """.format(
         "",
@@ -3014,8 +3019,8 @@ togglePlex();
         "" if https and force_https and not https_only else "disabled",
         "checked" if https_only else "",
         "" if https else "disabled",
-        ssl_card=SSL_CARD,
-        plex_scan_block=plex_scan_block(),
+        ssl_block=SSL_BLOCK,
+        plex_block=plex_block(),
         auth_card=AUTH_CARD.format(
             "checked" if auth else "",
             html.escape(saved_username, quote=True),
@@ -3595,8 +3600,10 @@ def plex_request(url, token, path):
 
 def plex_check(url, token, section):
     """Check the token and the library ID. Returns ``(state, message)`` with
-    state "ok", "bad" (Plex answered: wrong token or library) or "offline"."""
-    status, _error = plex_request(url, token, "/library/sections/{}".format(section))
+    state "ok", "bad" (Plex answered: wrong token or library) or "offline".
+    An empty *section* only asks for the list of libraries."""
+    path = "/library/sections/{}".format(section) if section else "/library/sections"
+    status, _error = plex_request(url, token, path)
 
     if status == 200:
         return "ok", ""
@@ -3612,9 +3619,8 @@ def plex_refresh(settings):
     Returns ``(ok, error)``; every library is asked even if one of them fails."""
     ok = True
     first_error = ""
-    for section in normalize_plex_sections(settings["section"]).split(","):
-        if not section:
-            continue
+    sections = normalize_plex_sections(settings["section"]).split(",") if settings["section"] else ["all"]
+    for section in sections:
         status, error = plex_request(
             settings["url"],
             settings["token"],
@@ -3675,7 +3681,8 @@ class PlexWatcher:
 
         if ok:
             self.failed = False
-            plex_log("scan requested for library {}".format(settings["section"]))
+            plex_log("scan requested for {}".format(
+                "library " + settings["section"] if settings["section"] else "all libraries"))
         elif not self.failed:
             # One line per streak of failures, not one every few seconds.
             self.failed = True

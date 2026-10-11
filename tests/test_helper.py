@@ -464,8 +464,8 @@ class SslManualTests(FormTests):
 
     def card(self):
         page = self.render()
-        card = page[page.index("SSL Certificate</span>"):]
-        return card[:card.index("<script>")]
+        card = page[page.index("<summary>SSL certificate instructions</summary>"):]
+        return card[:card.index("</details>")]
 
     def test_the_card_has_no_form_controls(self):
         card = self.card()
@@ -507,11 +507,13 @@ class SettingsLayoutTests(FormTests):
     def titles(self, page):
         return re.findall(r'<div class="settings-card-title">\s*<span class="metric-icon">.*?</span>\s*<span>([^<]*)</span>', page, re.S)
 
-    def test_the_buttons_follow_the_forms_and_the_certificate_manual_comes_last(self):
+    def test_the_certificate_manual_is_a_menu_in_the_https_card_above_the_buttons(self):
         page = self.render(privileged=False)
         titles = self.titles(page)
-        self.assertLess(titles.index("Authentication"), titles.index("SSL Certificate"))
-        self.assertLess(page.index('<button type="submit">Save'), page.index("SSL Certificate</span>"))
+        self.assertNotIn("SSL Certificate", titles)
+        self.assertLess(titles.index("HTTPS"), page.index("<summary>SSL certificate instructions</summary>"))
+        self.assertLess(page.index("<summary>SSL certificate instructions</summary>"), page.index('<button type="submit">Save'))
+        self.assertNotIn("SSL certificate instructions</summary>\n    <div", page)
         self.assertEqual(page.count('<button type="submit">Save'), 1)
 
     def test_no_media_server_window_any_more(self):
@@ -519,14 +521,16 @@ class SettingsLayoutTests(FormTests):
         self.assertNotIn("recommendations", page)
         self.assertFalse(hasattr(h, "media_recommendations_page"))
 
-    def test_fuse_help_is_inline_and_follows_the_checkbox(self):
+    def test_the_plex_help_is_in_the_plex_menu_under_the_fuse_checkbox(self):
         page = self.render(privileged=False)
-        self.assertIn('id="fuseHint"', page)
-        self.assertIn("toggleFuseHint()", page)
-        for text in ("Plex", "Emby", "Generate video preview thumbnails",
+        card = page[page.index("Enable FUSE filesystem"):]
+        card = card[:card.index("Authentication</span>")]
+        for text in ("Plex", "Generate video preview thumbnails",
                      "Perform extensive media analysis during maintenance",
-                     "Empty trash automatically after every scan"):
-            self.assertIn(text, page)
+                     "Empty trash automatically after every scan",
+                     "Where to find the Plex token and the library IDs"):
+            self.assertIn(text, card)
+        self.assertNotIn("Media servers</span>", page, "no separate card")
 
     def test_the_directory_help_explains_the_disk_cache(self):
         page = self.render(privileged=False)
@@ -1549,13 +1553,20 @@ class PlexWatcherTests(Base):
 
 
 class PlexBlockTests(Base):
-    def test_the_fields_and_the_recommendations_are_in_the_fuse_hint(self):
+    def test_the_fields_are_in_a_collapsed_plex_menu_under_the_fuse_checkbox(self):
         page = h.settings_page()
-        hint = page[page.index('id="fuseHint"'):]
+        card = page[page.index("Enable FUSE filesystem"):]
+        card = card[:card.index("Authentication</span>")]
+        self.assertIn("<summary>Using FUSE with Plex</summary>", card)
+        self.assertNotIn("<details class=\"media-hint\" open", card)
         for text in ("Scan the Plex library when a torrent is added", 'name="plex_url"', 'name="plex_token"',
                      'name="plex_section"', "togglePlex()"):
-            self.assertIn(text, hint)
+            self.assertIn(text, card)
         self.assertEqual(page.count('type="password" name="plex_token"'), 1)
+
+    def test_the_plex_fields_follow_the_fuse_checkbox(self):
+        page = h.settings_page()
+        self.assertRegex(page, r'name="fuse"[^>]*onchange="toggleFuseHint\(\)"')
 
 
 if __name__ == "__main__":
