@@ -76,11 +76,12 @@ ask Plex to scan a library whenever a torrent is added to TorrServer:
    `http://127.0.0.1:32400` fits Plex on the same NAS).
 3. **Plex token** is the token of your Plex account (it stays on the NAS in a
    file only the package user can read, and is never shown again).
-4. **Library ID** is the number after `source=` in the address of the library
+4. **Library IDs**: the number after `source=` in the address of the library
    in Plex Web (for example `...com.plexapp.plugins.library?source=6`). If your
    address looks different, open
    `http://<Plex address>:32400/library/sections?X-Plex-Token=<token>` in a
-   browser: the library's `key="..."` is its ID.
+   browser: the library's `key="..."` is its ID. For several libraries (movies
+   and series, say) write the IDs separated by commas: `6,7`.
 
 Saving checks the token and the library with Plex. A scan only lists folder
 names; it does not download any torrent data. The scan runs a few seconds after

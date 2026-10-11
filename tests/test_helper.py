@@ -1280,7 +1280,7 @@ class FakePlex:
                 outer.requests.append((self.path, self.headers.get("X-Plex-Token")))
                 if self.headers.get("X-Plex-Token") != token:
                     code = 401
-                elif self.path.startswith("/library/sections/7"):
+                elif self.path.startswith(("/library/sections/7", "/library/sections/8")):
                     code = 200
                 else:
                     code = 404
@@ -1324,6 +1324,18 @@ class PlexRequestTests(Base):
         ok, _ = h.plex_refresh(settings)
         self.assertTrue(ok)
         self.assertEqual(self.plex.requests, [("/library/sections/7/refresh", "goodtoken123")])
+
+
+class PlexRefreshSeveralTests(Base):
+    def test_every_library_is_scanned_and_one_failure_does_not_stop_the_others(self):
+        plex = FakePlex()
+        self.addCleanup(plex.close)
+        ok, error = h.plex_refresh(dict(url=plex.url, token="goodtoken123", section="7,99,8"))
+        self.assertFalse(ok)
+        self.assertIn("library 99", error)
+        self.assertEqual([path for path, _ in plex.requests],
+                         ["/library/sections/7/refresh", "/library/sections/99/refresh",
+                          "/library/sections/8/refresh"])
 
 
 class PlexSettingsTests(Base):
@@ -1413,6 +1425,23 @@ class PlexSettingsTests(Base):
         self.assertEqual(h.read_file(h.PLEX_TOKEN_FILE), "goodtoken123")
         ok, message = self.save(plex_token=h.PASSWORD_PLACEHOLDER)
         self.assertTrue(ok, message)
+
+    def test_several_libraries_are_normalized_checked_and_saved(self):
+        ok, message = self.save(plex_section=" 7, 8;7 ")
+        self.assertTrue(ok, message)
+        self.assertEqual(h.read_file(h.PLEX_SECTION_FILE), "7,8")
+
+    def test_one_unknown_library_among_several_refuses_the_save(self):
+        ok, message = self.save(plex_section="7,99")
+        self.assertFalse(ok)
+        self.assertIn("library", message)
+        self.assertFalse(os.path.exists(h.PLEX_SECTION_FILE))
+
+    def test_library_ids_must_be_numbers(self):
+        self.assertEqual(h.normalize_plex_sections("6, 7;6"), "6,7")
+        self.assertEqual(h.normalize_plex_sections("6"), "6")
+        for bad in ("", " ", "6,x", "6/7", "-1", "1234567", ",".join(str(n) for n in range(1, 12))):
+            self.assertEqual(h.normalize_plex_sections(bad), "", bad)
 
     def test_the_address_is_normalized(self):
         self.assertEqual(h.normalize_plex_url(" http://nas.local:32400/ "), "http://nas.local:32400")

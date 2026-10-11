@@ -713,6 +713,7 @@ def get_http_media():
 
 
 PLEX_SECTION_PATTERN = re.compile(r"^[0-9]{1,6}$")
+PLEX_MAX_SECTIONS = 10
 PLEX_TOKEN_PATTERN = re.compile(r"^[A-Za-z0-9_\-]{8,128}$")
 PLEX_URL_PATTERN = re.compile(r"^https?://[A-Za-z0-9.\-]+(:[0-9]{1,5})?$")
 
@@ -721,6 +722,20 @@ def normalize_plex_url(value):
     """``http(s)://host[:port]`` without a trailing slash, or "" when invalid."""
     value = (value or "").strip().rstrip("/")
     return value if PLEX_URL_PATTERN.match(value) else ""
+
+
+def normalize_plex_sections(value):
+    """"6, 7;6" -> "6,7": the library IDs once each, or "" when something is not a number."""
+    parts = [part for part in re.split(r"[,;\s]+", (value or "").strip()) if part]
+    sections = []
+    for part in parts:
+        if not PLEX_SECTION_PATTERN.match(part):
+            return ""
+        if part not in sections:
+            sections.append(part)
+    if not sections or len(sections) > PLEX_MAX_SECTIONS:
+        return ""
+    return ",".join(sections)
 
 
 def get_plex_settings():
@@ -1339,8 +1354,9 @@ def save_settings(params):
         if not plex_url:
             return False, "Plex address must look like http://127.0.0.1:32400"
 
-        if not PLEX_SECTION_PATTERN.match(plex_section):
-            return False, "Plex library ID must be a number"
+        plex_section = normalize_plex_sections(plex_section)
+        if not plex_section:
+            return False, "Plex library IDs must be numbers separated by commas"
 
         if plex_token == PASSWORD_PLACEHOLDER or not plex_token:
             plex_token = read_file(PLEX_TOKEN_FILE, "")
@@ -1353,11 +1369,13 @@ def save_settings(params):
 
         # A wrong token or library ID would fail silently later: ask Plex now.
         # If Plex is simply not reachable the settings are still saved.
-        state, plex_message = plex_check(plex_url, plex_token, plex_section)
-        if state == "bad":
-            return False, plex_message
-        if state == "offline":
-            plex_warning = "Plex could not be reached now, so the token and library ID were not checked"
+        for section in plex_section.split(","):
+            state, plex_message = plex_check(plex_url, plex_token, section)
+            if state == "bad":
+                return False, plex_message
+            if state == "offline":
+                plex_warning = "Plex could not be reached now, so the token and library ID were not checked"
+                break
 
     # ---- 2. Apply. Side effects start only after validation succeeded.
 
@@ -2694,12 +2712,12 @@ PLEX_SCAN_BLOCK = """
         </div>
 
         <div class="form-row">
-            <label for="plexSection">Library ID</label>
-            <input id="plexSection" type="text" name="plex_section" value="__SECTION__" inputmode="numeric" maxlength="6" placeholder="1" style="max-width:120px;">
+            <label for="plexSection">Library IDs</label>
+            <input id="plexSection" type="text" name="plex_section" value="__SECTION__" maxlength="80" placeholder="6,7" style="max-width:220px;">
         </div>
 
         <div class="help" style="grid-column:2">
-            The library ID is the number after source= in the address of the library in Plex Web. The scan only reads folder names and does not download any torrent data.
+            The library ID is the number after source= in the address of the library in Plex Web. For several libraries (for example movies and series) separate the numbers with commas: 6,7. The scan only reads folder names and does not download any torrent data.
         </div>
     </div>
 </div>
@@ -3590,13 +3608,22 @@ def plex_check(url, token, section):
 
 
 def plex_refresh(settings):
-    """Ask Plex to scan the library. Listing a FUSE folder reads no torrent data."""
-    status, error = plex_request(
-        settings["url"],
-        settings["token"],
-        "/library/sections/{}/refresh".format(settings["section"]),
-    )
-    return status == 200, error
+    """Ask Plex to scan the libraries. Listing a FUSE folder reads no torrent data.
+    Returns ``(ok, error)``; every library is asked even if one of them fails."""
+    ok = True
+    first_error = ""
+    for section in normalize_plex_sections(settings["section"]).split(","):
+        if not section:
+            continue
+        status, error = plex_request(
+            settings["url"],
+            settings["token"],
+            "/library/sections/{}/refresh".format(section),
+        )
+        if status != 200:
+            ok = False
+            first_error = first_error or "library {}: {}".format(section, error or status)
+    return ok, first_error
 
 
 PLEX_POLL_SECONDS = 5
@@ -3648,7 +3675,7 @@ class PlexWatcher:
 
         if ok:
             self.failed = False
-            plex_log("library {} scan requested".format(settings["section"]))
+            plex_log("scan requested for library {}".format(settings["section"]))
         elif not self.failed:
             # One line per streak of failures, not one every few seconds.
             self.failed = True
