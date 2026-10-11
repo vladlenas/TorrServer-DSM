@@ -11,7 +11,8 @@ TorrServer DSM provides a native DSM interface for managing TorrServer on Synolo
 - Port configuration for HTTP / HTTPS, Force HTTPS, and an option to keep stream
   links on plain HTTP for players and TVs that cannot use HTTPS, or HTTPS only
   (the HTTP port is closed)
-- TorrServer cache folder and optional FUSE
+- TorrServer cache folder and optional FUSE, with an optional Plex library scan
+  when a torrent is added (see [Plex and FUSE](#plex-and-fuse))
 - HTTPS: TorrServer's own certificate, or one of your own uploaded on TorrServer's
   page, kept fresh by a DSM task or a reverse proxy (see [SSL certificates](#ssl-certificates))
 - HTTP authentication
@@ -63,6 +64,32 @@ data where it already is; the disk cache is then switched on in the TorrServer
 web interface. Choose a folder only if you want the Helper to prepare `Cache`
 (and `FUSE`) for you. Ticking **FUSE** shows a short inline hint on using it
 with Plex or Emby; there is no separate recommendations window.
+
+### Plex and FUSE
+
+Plex does not notice new files on a FUSE folder by itself, because a FUSE
+folder sends no change notifications. Under the **FUSE** checkbox the Helper can
+ask Plex to scan a library whenever a torrent is added to TorrServer:
+
+1. Tick **Scan the Plex library when a torrent is added**.
+2. **Plex address** is where the Helper reaches Plex (the default
+   `http://127.0.0.1:32400` fits Plex on the same NAS).
+3. **Plex token** is the token of your Plex account (it stays on the NAS in a
+   file only the package user can read, and is never shown again).
+4. **Library ID** is the number after `sections/` in the library address in
+   Plex Web.
+
+Saving checks the token and the library with Plex. A scan only lists folder
+names; it does not download any torrent data. The scan runs a few seconds after
+a torrent is added and once more about 45 seconds later, because a magnet link
+shows its files in the folder only when its metadata has arrived. The result is
+written to the TorrServer log.
+
+For Plex libraries on FUSE the hint lists the Plex settings that would read the
+virtual files in full (video preview and chapter thumbnails, intro and credits
+markers, loudness analysis, extensive media analysis) and one more that can
+delete items after a scan of an empty folder (**Empty trash automatically after
+every scan**).
 
 If the **TorrServer** user may write there, the Helper creates `Cache` and
 `FUSE` itself. The folder chooser marks folders it cannot write to with

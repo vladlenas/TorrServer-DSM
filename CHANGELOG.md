@@ -3,6 +3,29 @@
 The top entry is used as the GitHub release notes; keep its version equal to
 `PKG_VERSION` in `Makefile`.
 
+## 2.12.146 (2026-10-11)
+
+TorrServer stays at `MatriX.146`.
+
+### Added
+
+- **Plex library scan when a torrent is added.** Under the FUSE checkbox in the
+  Settings: Plex address, Plex token and Library ID. The Helper watches the
+  torrent list and asks Plex to scan the library a few seconds after a new
+  torrent appears and once more about 45 seconds later, so Plex finds it
+  without a scheduled scan. The token and the library are checked with Plex
+  when the settings are saved, the token is stored in a file only the package
+  user can read, and the result is written to the TorrServer log.
+
+### Changed
+
+- **FUSE recommendations for Plex rewritten.** They now list every Plex setting
+  that reads the virtual files in full (video preview and chapter thumbnails,
+  intro and credits markers, loudness analysis, extensive media analysis during
+  maintenance) and **Empty trash automatically after every scan**, which can
+  delete items and their watch progress when a scan runs while the FUSE folder
+  is empty.
+
 ## 2.11.146 (2026-10-10)
 
 TorrServer stays at `MatriX.146`.

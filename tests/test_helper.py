@@ -273,7 +273,8 @@ class SaveSettingsTests(Base):
         self.assertTrue(ok, message)
         self.assertEqual(sorted(os.listdir(VAR)), sorted(os.path.basename(f) for f in (
             h.PORT_FILE, h.TORRSERVER_DIR_FILE, h.AUTH_FILE, h.FUSE_FILE, h.HTTPS_PORT_FILE,
-            h.HTTPS_FILE, h.FORCE_HTTPS_FILE, h.HTTP_MEDIA_FILE, h.HTTPS_ONLY_FILE)))
+            h.HTTPS_FILE, h.FORCE_HTTPS_FILE, h.HTTP_MEDIA_FILE, h.HTTPS_ONLY_FILE,
+        h.PLEX_SCAN_FILE)))
 
     def test_saving_never_touches_a_certificate_pair(self):
         for name in ("server.pem", "server.key"):
@@ -522,7 +523,9 @@ class SettingsLayoutTests(FormTests):
         page = self.render(privileged=False)
         self.assertIn('id="fuseHint"', page)
         self.assertIn("toggleFuseHint()", page)
-        for text in ("Plex", "Emby", "Video preview thumbnails"):
+        for text in ("Plex", "Emby", "Generate video preview thumbnails",
+                     "Perform extensive media analysis during maintenance",
+                     "Empty trash automatically after every scan"):
             self.assertIn(text, page)
 
     def test_the_directory_help_explains_the_disk_cache(self):
@@ -1262,6 +1265,268 @@ class OutsideTextIsNotTranslatedTests(Base):
         h.get_torrserver_dir = lambda: "/volume1/Status/Start"
         page = h.main_page("nas.local")
         self.assertIn("/volume1/Status/Start", page)
+
+
+
+class FakePlex:
+    """A Plex that checks the token header and knows one library (ID 7)."""
+
+    def __init__(self, token="goodtoken123"):
+        self.requests = []
+        outer = self
+
+        class Handler(BaseHTTPRequestHandler):
+            def do_GET(self):
+                outer.requests.append((self.path, self.headers.get("X-Plex-Token")))
+                if self.headers.get("X-Plex-Token") != token:
+                    code = 401
+                elif self.path.startswith("/library/sections/7"):
+                    code = 200
+                else:
+                    code = 404
+                self.send_response(code)
+                self.send_header("Content-Length", "0")
+                self.end_headers()
+
+            def log_message(self, *args):
+                pass
+
+        self.server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+        self.url = "http://127.0.0.1:%d" % self.server.server_address[1]
+        threading.Thread(target=self.server.serve_forever, daemon=True).start()
+
+    def close(self):
+        self.server.shutdown()
+        self.server.server_close()
+
+
+class PlexRequestTests(Base):
+    def setUp(self):
+        super().setUp()
+        self.plex = FakePlex()
+        self.addCleanup(self.plex.close)
+
+    def test_check_accepts_a_known_library(self):
+        self.assertEqual(h.plex_check(self.plex.url, "goodtoken123", "7")[0], "ok")
+
+    def test_check_reports_a_wrong_token_and_a_wrong_library(self):
+        state, message = h.plex_check(self.plex.url, "wrongtoken123", "7")
+        self.assertEqual((state, message), ("bad", "Plex rejected the token"))
+        state, message = h.plex_check(self.plex.url, "goodtoken123", "99")
+        self.assertEqual(state, "bad")
+        self.assertIn("library ID", message)
+
+    def test_check_treats_an_unreachable_plex_as_offline(self):
+        self.assertEqual(h.plex_check("http://127.0.0.1:%d" % free_port(), "goodtoken123", "7")[0], "offline")
+
+    def test_refresh_sends_the_token_in_a_header_not_in_the_address(self):
+        settings = dict(url=self.plex.url, token="goodtoken123", section="7")
+        ok, _ = h.plex_refresh(settings)
+        self.assertTrue(ok)
+        self.assertEqual(self.plex.requests, [("/library/sections/7/refresh", "goodtoken123")])
+
+
+class PlexSettingsTests(Base):
+    BASE = dict(port="8090", torrserver_dir="/volume1/TS", https="0", https_port="8091",
+                auth="0", fuse="1", plex_scan="1", plex_url="", plex_token="goodtoken123",
+                plex_section="7")
+
+    def setUp(self):
+        super().setUp()
+        self.plex = FakePlex()
+        self.addCleanup(self.plex.close)
+        self.patches = {
+            "prepare_torrserver_directory": lambda d: (True, ""),
+            "cache_browser_path": lambda p: p,
+            "is_port_in_use": lambda n, allowed_ports=None: False,
+            "set_cache_path": lambda path, port: ("applied", ""),
+        }
+        self.saved = {k: getattr(h, k) for k in self.patches}
+        for k, v in self.patches.items():
+            setattr(h, k, v)
+        self.addCleanup(lambda: [setattr(h, k, v) for k, v in self.saved.items()])
+
+    def save(self, **overrides):
+        data = dict(self.BASE, plex_url=self.plex.url)
+        data.update(overrides)
+        return h.save_settings({k: [v] for k, v in data.items()})
+
+    def test_everything_is_saved_and_the_token_file_is_private(self):
+        ok, message = self.save()
+        self.assertTrue(ok, message)
+        self.assertEqual(h.read_file(h.PLEX_SCAN_FILE), "1")
+        self.assertEqual(h.read_file(h.PLEX_URL_FILE), self.plex.url)
+        self.assertEqual(h.read_file(h.PLEX_SECTION_FILE), "7")
+        self.assertEqual(h.read_file(h.PLEX_TOKEN_FILE), "goodtoken123")
+        self.assertEqual(os.stat(h.PLEX_TOKEN_FILE).st_mode & 0o777, 0o600)
+        self.assertTrue(h.get_plex_settings()["active"])
+
+    def test_the_token_is_never_put_into_the_page(self):
+        self.save()
+        page = h.settings_page()
+        self.assertNotIn("goodtoken123", page)
+        self.assertIn(h.PASSWORD_PLACEHOLDER, page)
+
+    def test_the_saved_token_is_kept_when_the_field_still_shows_the_placeholder(self):
+        self.save()
+        ok, message = self.save(plex_token=h.PASSWORD_PLACEHOLDER)
+        self.assertTrue(ok, message)
+        self.assertEqual(h.read_file(h.PLEX_TOKEN_FILE), "goodtoken123")
+
+    def test_a_wrong_token_or_library_is_refused_and_nothing_changes(self):
+        for overrides in (dict(plex_token="wrongtoken123"), dict(plex_section="99")):
+            ok, message = self.save(**overrides)
+            self.assertFalse(ok, overrides)
+            self.assertIn("Plex", message)
+        self.assertFalse(os.path.exists(h.PLEX_SCAN_FILE))
+        self.assertFalse(os.path.exists(h.PORT_FILE))
+
+    def test_invalid_input_is_refused(self):
+        for overrides in (
+            dict(plex_url="ftp://host"),
+            dict(plex_url="http://user:pw@host:32400"),
+            dict(plex_url="http://host:32400/path"),
+            dict(plex_section="abc"),
+            dict(plex_section=""),
+            dict(plex_token=""),
+            dict(plex_token="bad token!"),
+        ):
+            ok, _message = self.save(**overrides)
+            self.assertFalse(ok, overrides)
+
+    def test_an_unreachable_plex_still_saves_with_a_warning(self):
+        ok, message = self.save(plex_url="http://127.0.0.1:%d" % free_port())
+        self.assertTrue(ok, message)
+        self.assertIn("could not be reached", message)
+        self.assertEqual(h.read_file(h.PLEX_SCAN_FILE), "1")
+
+    def test_the_scan_is_off_without_fuse_or_without_the_checkbox(self):
+        for overrides in (dict(fuse="0"), dict(plex_scan="0")):
+            ok, message = self.save(**overrides)
+            self.assertTrue(ok, message)
+            self.assertEqual(h.read_file(h.PLEX_SCAN_FILE), "0", overrides)
+            self.assertFalse(h.get_plex_settings()["active"])
+
+    def test_turning_the_scan_off_keeps_the_token_for_later(self):
+        self.save()
+        self.save(plex_scan="0")
+        self.assertEqual(h.read_file(h.PLEX_TOKEN_FILE), "goodtoken123")
+        ok, message = self.save(plex_token=h.PASSWORD_PLACEHOLDER)
+        self.assertTrue(ok, message)
+
+    def test_the_address_is_normalized(self):
+        self.assertEqual(h.normalize_plex_url(" http://nas.local:32400/ "), "http://nas.local:32400")
+        self.assertEqual(h.normalize_plex_url("https://192.168.1.5:32400"), "https://192.168.1.5:32400")
+        for bad in ("", "nas", "http://", "http://a b", "javascript:alert(1)", "http://a/b"):
+            self.assertEqual(h.normalize_plex_url(bad), "", bad)
+
+
+class PlexWatcherTests(Base):
+    def setUp(self):
+        super().setUp()
+        self.torrents = {"a", "b"}
+        self.refreshes = []
+        self.ok = True
+        self.logs = []
+        self.saved = (h.torrserver_request, h.plex_refresh, h.plex_log)
+        h.torrserver_request = self.fake_request
+        h.plex_refresh = self.fake_refresh
+        h.plex_log = self.logs.append
+        self.addCleanup(lambda: (setattr(h, "torrserver_request", self.saved[0]),
+                                 setattr(h, "plex_refresh", self.saved[1]),
+                                 setattr(h, "plex_log", self.saved[2])))
+        for path, value in ((h.FUSE_FILE, "1"), (h.PLEX_SCAN_FILE, "1"), (h.PLEX_URL_FILE, "http://127.0.0.1:32400"),
+                            (h.PLEX_SECTION_FILE, "3"), (h.PLEX_TOKEN_FILE, "goodtoken123")):
+            h.write_file(path, value)
+
+    def fake_request(self, payload, http_port=None, path="/settings"):
+        self.assertEqual((payload, path), ({"action": "list"}, "/torrents"))
+        if self.torrents is None:
+            return False, "down", False
+        return True, [{"hash": x, "title": "t"} for x in sorted(self.torrents)], True
+
+    def fake_refresh(self, settings):
+        self.refreshes.append(settings["section"])
+        return self.ok, "" if self.ok else "boom"
+
+    def test_existing_torrents_are_not_news(self):
+        watcher = h.PlexWatcher()
+        watcher.step(0)
+        watcher.step(100)
+        self.assertEqual(self.refreshes, [])
+
+    def test_a_new_torrent_scans_soon_and_once_more_later(self):
+        watcher = h.PlexWatcher()
+        watcher.step(0)
+        self.torrents.add("c")
+        watcher.step(10)
+        self.assertEqual(self.refreshes, [])
+        watcher.step(10 + h.PLEX_SCAN_DELAYS[0])
+        self.assertEqual(self.refreshes, ["3"])
+        watcher.step(10 + h.PLEX_SCAN_DELAYS[1] - 1)
+        self.assertEqual(self.refreshes, ["3"])
+        watcher.step(10 + h.PLEX_SCAN_DELAYS[1])
+        self.assertEqual(self.refreshes, ["3", "3"])
+        watcher.step(500)
+        self.assertEqual(self.refreshes, ["3", "3"])
+
+    def test_removing_a_torrent_does_not_scan(self):
+        watcher = h.PlexWatcher()
+        watcher.step(0)
+        self.torrents.discard("a")
+        watcher.step(10)
+        watcher.step(200)
+        self.assertEqual(self.refreshes, [])
+
+    def test_a_torrserver_that_is_down_changes_nothing(self):
+        watcher = h.PlexWatcher()
+        watcher.step(0)
+        self.torrents = None
+        watcher.step(10)
+        self.torrents = {"a", "b"}
+        watcher.step(20)
+        watcher.step(200)
+        self.assertEqual(self.refreshes, [])
+
+    def test_nothing_happens_while_the_option_is_off(self):
+        watcher = h.PlexWatcher()
+        h.write_file(h.PLEX_SCAN_FILE, "0")
+        watcher.step(0)
+        self.torrents.add("c")
+        watcher.step(10)
+        watcher.step(200)
+        self.assertEqual(self.refreshes, [])
+        # turning it on starts from the current list, old torrents are not news
+        h.write_file(h.PLEX_SCAN_FILE, "1")
+        watcher.step(300)
+        watcher.step(400)
+        self.assertEqual(self.refreshes, [])
+
+    def test_a_failing_plex_is_logged_once_per_streak(self):
+        watcher = h.PlexWatcher()
+        watcher.step(0)
+        self.ok = False
+        self.torrents.add("c")
+        watcher.step(10)
+        for moment in (20, 30, 100):
+            watcher.step(moment)
+        self.assertEqual(len(self.logs), 1)
+        self.assertIn("failed", self.logs[0])
+        self.ok = True
+        self.torrents.add("d")
+        watcher.step(110)
+        watcher.step(200)
+        self.assertTrue(any("scan requested" in line for line in self.logs))
+
+
+class PlexBlockTests(Base):
+    def test_the_fields_and_the_recommendations_are_in_the_fuse_hint(self):
+        page = h.settings_page()
+        hint = page[page.index('id="fuseHint"'):]
+        for text in ("Scan the Plex library when a torrent is added", 'name="plex_url"', 'name="plex_token"',
+                     'name="plex_section"', "togglePlex()"):
+            self.assertIn(text, hint)
+        self.assertEqual(page.count('type="password" name="plex_token"'), 1)
 
 
 if __name__ == "__main__":
