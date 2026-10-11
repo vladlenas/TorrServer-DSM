@@ -2699,7 +2699,7 @@ PLEX_SCAN_BLOCK = """
         </div>
 
         <div class="help" style="grid-column:2">
-            The library ID is the number after sections/ in the library address in Plex Web. The scan only reads folder names and does not download any torrent data.
+            The library ID is the number after source= in the address of the library in Plex Web. The scan only reads folder names and does not download any torrent data.
         </div>
     </div>
 </div>

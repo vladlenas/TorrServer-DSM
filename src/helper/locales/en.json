@@ -132,7 +132,7 @@
   "Plex address": "Plex address",
   "Plex token": "Plex token",
   "Library ID": "Library ID",
-  "The library ID is the number after sections/ in the library address in Plex Web. The scan only reads folder names and does not download any torrent data.": "The library ID is the number after sections/ in the library address in Plex Web. The scan only reads folder names and does not download any torrent data.",
+  "The library ID is the number after source= in the address of the library in Plex Web. The scan only reads folder names and does not download any torrent data.": "The library ID is the number after source= in the address of the library in Plex Web. The scan only reads folder names and does not download any torrent data.",
   "Plex address must look like http://127.0.0.1:32400": "Plex address must look like http://127.0.0.1:32400",
   "Plex library ID must be a number": "Plex library ID must be a number",
   "Plex token is required": "Plex token is required",

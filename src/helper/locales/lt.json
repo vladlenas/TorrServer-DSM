@@ -132,7 +132,7 @@
   "Plex address": "„Plex“ adresas",
   "Plex token": "„Plex“ prieigos raktas",
   "Library ID": "Bibliotekos ID",
-  "The library ID is the number after sections/ in the library address in Plex Web. The scan only reads folder names and does not download any torrent data.": "Bibliotekos ID yra skaičius po sections/ bibliotekos adrese „Plex Web“. Skenavimas skaito tik aplankų pavadinimus ir neatsisiunčia torentų duomenų.",
+  "The library ID is the number after source= in the address of the library in Plex Web. The scan only reads folder names and does not download any torrent data.": "Bibliotekos ID yra skaičius po source= bibliotekos adrese „Plex Web“. Skenavimas skaito tik aplankų pavadinimus ir neatsisiunčia torentų duomenų.",
   "Plex address must look like http://127.0.0.1:32400": "„Plex“ adresas turi atrodyti taip: http://127.0.0.1:32400",
   "Plex library ID must be a number": "„Plex“ bibliotekos ID turi būti skaičius",
   "Plex token is required": "Reikalingas „Plex“ prieigos raktas",

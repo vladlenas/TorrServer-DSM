@@ -132,7 +132,7 @@
   "Plex address": "Адреса Plex",
   "Plex token": "Токен Plex",
   "Library ID": "ID бібліотеки",
-  "The library ID is the number after sections/ in the library address in Plex Web. The scan only reads folder names and does not download any torrent data.": "ID бібліотеки — число після sections/ в адресі бібліотеки в Plex Web. Сканування читає лише назви папок і не завантажує дані торентів.",
+  "The library ID is the number after source= in the address of the library in Plex Web. The scan only reads folder names and does not download any torrent data.": "ID бібліотеки — число після source= в адресі бібліотеки в Plex Web. Сканування читає лише назви папок і не завантажує дані торентів.",
   "Plex address must look like http://127.0.0.1:32400": "Адреса Plex має виглядати так: http://127.0.0.1:32400",
   "Plex library ID must be a number": "ID бібліотеки Plex має бути числом",
   "Plex token is required": "Потрібен токен Plex",
