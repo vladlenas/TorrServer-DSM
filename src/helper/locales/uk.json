@@ -21,10 +21,11 @@
   "Not set": "Не вказано",
   "Architecture": "Архітектура",
   "Information": "Інформація",
-  "TorrServer project, Synology SPK package and support": "Проєкт TorrServer, пакет SPK для Synology та підтримка",
+  "TorrServer project, TorrServer DSM package and support": "Проєкт TorrServer, пакет TorrServer DSM та підтримка",
   "TorrServer Project ↗": "Проєкт TorrServer ↗",
-  "SPK Project ↗": "Проєкт SPK ↗",
+  "TorrServer DSM Project ↗": "Проєкт TorrServer DSM ↗",
   "♥ Support TorrServer project ↗": "♥ Підтримати проєкт TorrServer ↗",
+  "♥ Support TorrServer DSM project ↗": "♥ Підтримати проєкт TorrServer DSM ↗",
   "TorrServer Settings": "Налаштування TorrServer",
   "To apply changes, click <b>Save</b>, then <b>Restart</b>.": "Щоб застосувати зміни, натисніть <b>Зберегти</b>, а потім <b>Перезапустити</b>.",
   "Save": "Зберегти",
@@ -34,6 +35,10 @@
   "Enable HTTPS": "Увімкнути HTTPS",
   "HTTPS port": "Порт HTTPS",
   "Force HTTPS (redirect HTTP to HTTPS)": "Примусовий HTTPS (перенаправляти HTTP на HTTPS)",
+  "Keep stream links on HTTP for players and TVs": "Залишити посилання на потоки по HTTP для плеєрів і ТВ",
+  "Players and TVs that cannot use HTTPS keep working: only the stream links (/stream, /play, playlists) stay on plain HTTP, everything else is redirected. The streams and the password of HTTP authentication are then sent unencrypted, so use this on a trusted home network only.": "Плеєри й телевізори без підтримки HTTPS продовжать працювати: по звичайному HTTP залишаються тільки посилання на потоки (/stream, /play, плейлисти), усе інше перенаправляється. Потоки та пароль HTTP-автентифікації при цьому передаються без шифрування, тому вмикайте лише в довіреній домашній мережі.",
+  "HTTPS only (close the HTTP port)": "Лише HTTPS (закрити порт HTTP)",
+  "Nothing is served over plain HTTP any more, not even a redirect, so no request or password can leave the NAS unencrypted. Use it with a trusted certificate: with the self-signed one, players and TVs will not play.": "По звичайному HTTP більше нічого не віддається, навіть перенаправлення, тому ні запит, ні пароль не підуть з NAS без шифрування. Використовуйте з довіреним сертифікатом: із самопідписаним плеєри й телевізори не гратимуть.",
   "SSL Certificate": "SSL-сертифікат",
   "DSM certificate": "Сертифікат DSM",
   "Enable authentication": "Увімкнути автентифікацію",
@@ -121,5 +126,7 @@
   ". Give the TorrServer user Read/Write permission on the shared folder ": ". Надайте користувачу TorrServer дозвіл Read/Write на спільну папку ",
   "no write access": "немає прав на запис",
   " (in DSM: Control Panel → Shared Folder → Edit → Permissions → System internal user).": " (у DSM: Control Panel → Shared Folder → Edit → Permissions → System internal user).",
-  "Select TorrServer directory": "Вибір каталогу TorrServer"
+  "Select TorrServer directory": "Вибір каталогу TorrServer",
+  "redirects to HTTPS, streams stay on HTTP": "перенаправляє на HTTPS, потоки залишаються на HTTP",
+  "redirects to HTTPS": "перенаправляє на HTTPS"
 }

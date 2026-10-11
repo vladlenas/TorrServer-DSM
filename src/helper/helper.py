@@ -56,6 +56,8 @@ FUSE_FILE = os.path.join(PACKAGE_VAR, "torrserver.fuse")
 HTTPS_FILE = os.path.join(PACKAGE_VAR, "torrserver.https")
 HTTPS_PORT_FILE = os.path.join(PACKAGE_VAR, "torrserver.https.port")
 FORCE_HTTPS_FILE = os.path.join(PACKAGE_VAR, "torrserver.force.https")
+HTTP_MEDIA_FILE = os.path.join(PACKAGE_VAR, "torrserver.http.media")
+HTTPS_ONLY_FILE = os.path.join(PACKAGE_VAR, "torrserver.https.only")
 
 HELPER_DIR = os.path.dirname(os.path.abspath(__file__))
 STATUS_LOGO_FILE = os.path.join(HELPER_DIR, "torrserver-status.png")
@@ -606,6 +608,7 @@ def get_running_ports():
         "https": None,
         "ssl": False,
         "force_https": False,
+        "https_only": False,
     }
 
     try:
@@ -660,6 +663,9 @@ def get_running_ports():
                     elif arg == "--force-https":
                         result["force_https"] = True
 
+                    elif arg == "--https-only":
+                        result["https_only"] = True
+
                 return result
 
             except (OSError, IOError):
@@ -695,6 +701,14 @@ def get_https_port():
 
 def get_force_https():
     return read_file(FORCE_HTTPS_FILE, "0") == "1"
+
+
+def get_http_media():
+    return read_file(HTTP_MEDIA_FILE, "0") == "1"
+
+
+def get_https_only():
+    return read_file(HTTPS_ONLY_FILE, "0") == "1"
 
 
 def is_torrserver_running():
@@ -1217,6 +1231,8 @@ def save_settings(params):
     https = field("https", "0")
     https_port = field("https_port", "8091").strip()
     force_https = field("force_https", "0")
+    http_media = field("http_media", "0")
+    https_only = field("https_only", "0")
 
     old_port = get_port()
     old_https_port = get_https_port()
@@ -1303,7 +1319,14 @@ def save_settings(params):
         write_file(PORT_FILE, str(port_number))
         write_file(HTTPS_PORT_FILE, str(https_port_number))
         write_file(HTTPS_FILE, "1" if https == "1" else "0")
-        write_file(FORCE_HTTPS_FILE, "1" if force_https == "1" and https == "1" else "0")
+        # "HTTPS only" closes the HTTP port, so it excludes the redirect and
+        # the plain-HTTP stream links (TorrServer refuses the combination).
+        only = https == "1" and https_only == "1"
+        force = https == "1" and force_https == "1" and not only
+        write_file(HTTPS_ONLY_FILE, "1" if only else "0")
+        write_file(FORCE_HTTPS_FILE, "1" if force else "0")
+        # Plain-HTTP media URLs only make sense while HTTP is redirected.
+        write_file(HTTP_MEDIA_FILE, "1" if force and http_media == "1" else "0")
     except OSError as e:
         return False, "Unable to write settings: {}".format(e)
 
@@ -2102,17 +2125,22 @@ pre {{
 }}
 
 .info-links {{
-    display: flex;
-    flex-wrap: wrap;
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
     gap: 8px;
-    justify-content: flex-end;
+    flex: 1 1 auto;
+    max-width: 460px;
 }}
 
 .info-link {{
-    display: inline-flex;
+    display: flex;
     align-items: center;
-    min-height: 34px;
-    padding: 0 12px;
+    justify-content: center;
+    box-sizing: border-box;
+    min-height: 40px;
+    padding: 6px 12px;
+    text-align: center;
+    line-height: 1.3;
     border: 1px solid #d6e0ec;
     border-radius: 6px;
     background: #f7f9fc;
@@ -2147,14 +2175,13 @@ pre {{
     }}
 
     .info-links {{
-        justify-content: flex-start;
-    
-    
+        grid-template-columns: 1fr;
     }}
 
     .info-maintainer-top {{
         position: static;
         margin-bottom: 8px;
+        white-space: normal;
     
     
     }}
@@ -2268,17 +2295,24 @@ def main_page(host):
     configured_https = get_https_enabled()
     auth = get_auth_enabled()
 
-    # Each protocol shows its own port, or "Disabled" (HTTPS off, or HTTP
-    # switched off by "HTTPS only").
-    http_off = configured_https and get_force_https()
-    http_value = "Disabled" if http_off else str(configured_port)
+    # Each protocol shows its own port, or "Disabled" (HTTPS off). With
+    # "Force HTTPS" the HTTP port still answers, but only with a redirect.
+    http_value = str(configured_port)
+    if configured_https and get_https_only():
+        http_value = "Disabled"
+    elif configured_https and get_force_https():
+        http_value += (
+            ", redirects to HTTPS, streams stay on HTTP"
+            if get_http_media()
+            else ", redirects to HTTPS"
+        )
     https_value = str(get_https_port()) if configured_https else "Disabled"
 
     running = get_running_ports()
     running_http_port = running["http"]
     running_https_port = running["https"]
     running_ssl = running["ssl"]
-    running_force_https = running["force_https"]
+    running_force_https = running["force_https"] or running["https_only"]
 
     http_action = ""
     if running_http_port is not None and not running_force_https:
@@ -2428,7 +2462,7 @@ def main_page(host):
 
 
 <div class="dashboard-card info-card">
-    <div class="info-maintainer-top">Synology SPK package maintained by vladlenas</div>
+    <div class="info-maintainer-top">TorrServer DSM for Synology, maintained by vladlenas</div>
 
     <div class="dashboard-card-title">
         <span class="metric-icon" data-icon="info"></span>
@@ -2438,13 +2472,14 @@ def main_page(host):
     <div class="info-layout">
         <div class="info-text">
             <div class="info-title">TorrServer DSM</div>
-            <div class="info-subtitle">TorrServer project, Synology SPK package and support</div>
+            <div class="info-subtitle">TorrServer project, TorrServer DSM package and support</div>
         </div>
 
         <div class="info-links">
             <a class="info-link" href="https://github.com/YouROK/TorrServer" target="_blank" rel="noopener noreferrer">TorrServer Project ↗</a>
-            <a class="info-link" href="https://github.com/vladlenas/TorrServer-DSM" target="_blank" rel="noopener noreferrer">SPK Project ↗</a>
+            <a class="info-link" href="https://github.com/vladlenas/TorrServer-DSM" target="_blank" rel="noopener noreferrer">TorrServer DSM Project ↗</a>
             <a class="info-link info-donate" href="https://github.com/YouROK/TorrServer#donate" target="_blank" rel="noopener noreferrer">♥ Support TorrServer project ↗</a>
+            <a class="info-link info-donate" href="https://paypal.me/VoxelFirmware" target="_blank" rel="noopener noreferrer">♥ Support TorrServer DSM project ↗</a>
         </div>
     </div>
 </div>
@@ -2573,6 +2608,8 @@ def settings_page(message="", torrserver_dir_override=""):
     https = get_https_enabled()
     https_port = get_https_port()
     force_https = get_force_https()
+    http_media = get_http_media()
+    https_only = get_https_only()
     saved_username, saved_password = get_saved_account()
 
     body = page_header("TorrServer Settings")
@@ -2689,9 +2726,29 @@ To apply changes, click <b>Save</b>, then <b>Restart</b>.
 
         <div class="checkbox-row">
             <label>
-                <input type="checkbox" name="force_https" value="1" {} {}>
+                <input type="checkbox" name="force_https" value="1" {} {} onchange="toggleHttps(this)">
                 Force HTTPS (redirect HTTP to HTTPS)
             </label>
+        </div>
+
+        <div class="checkbox-row">
+            <label>
+                <input type="checkbox" name="http_media" value="1" {} {} onchange="toggleHttps(this)">
+                Keep stream links on HTTP for players and TVs
+            </label>
+        </div>
+        <div id="httpMediaHint" class="media-hint">
+            Players and TVs that cannot use HTTPS keep working: only the stream links (/stream, /play, playlists) stay on plain HTTP, everything else is redirected. The streams and the password of HTTP authentication are then sent unencrypted, so use this on a trusted home network only.
+        </div>
+
+        <div class="checkbox-row">
+            <label>
+                <input type="checkbox" name="https_only" value="1" {} {} onchange="toggleHttps(this)">
+                HTTPS only (close the HTTP port)
+            </label>
+        </div>
+        <div id="httpsOnlyHint" class="media-hint">
+            Nothing is served over plain HTTP any more, not even a redirect, so no request or password can leave the NAS unencrypted. Use it with a trusted certificate: with the self-signed one, players and TVs will not play.
         </div>
 
     </div>
@@ -2711,9 +2768,25 @@ To apply changes, click <b>Save</b>, then <b>Restart</b>.
 </div>
 
 <script>
-function toggleHttps() {{
-    var enabled = document.querySelector('input[name="https"]').checked;
-    document.getElementById('httpsPort').disabled = !enabled;
+function toggleHttps(changed) {{
+    var field = function(name) {{ return document.querySelector('input[name="' + name + '"]'); }};
+    var https = field('https').checked;
+    var force = field('force_https');
+    var media = field('http_media');
+    var only = field('https_only');
+
+    // "HTTPS only" and the redirect exclude each other.
+    if (changed === only && only.checked) {{ force.checked = false; }}
+    if (changed === force && force.checked) {{ only.checked = false; }}
+    if (only.checked) {{ force.checked = false; }}
+    if (!force.checked) {{ media.checked = false; }}
+
+    document.getElementById('httpsPort').disabled = !https;
+    force.disabled = !https;
+    only.disabled = !https;
+    media.disabled = !(https && force.checked);
+    document.getElementById('httpMediaHint').style.display = media.checked && !media.disabled ? 'block' : 'none';
+    document.getElementById('httpsOnlyHint').style.display = only.checked && !only.disabled ? 'block' : 'none';
 }}
 
 function toggleAuth() {{
@@ -2768,7 +2841,11 @@ toggleFuseHint();
         "checked" if https else "",
         "",
         https_port,
-        "checked" if force_https else "",
+        "checked" if force_https and not https_only else "",
+        "" if https else "disabled",
+        "checked" if http_media and not https_only else "",
+        "" if https and force_https and not https_only else "disabled",
+        "checked" if https_only else "",
         "" if https else "disabled",
         ssl_card=SSL_CARD,
         auth_card=AUTH_CARD.format(

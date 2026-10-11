@@ -21,10 +21,11 @@
   "Not set": "Not set",
   "Architecture": "Architecture",
   "Information": "Information",
-  "TorrServer project, Synology SPK package and support": "TorrServer project, Synology SPK package and support",
+  "TorrServer project, TorrServer DSM package and support": "TorrServer project, TorrServer DSM package and support",
   "TorrServer Project ↗": "TorrServer Project ↗",
-  "SPK Project ↗": "SPK Project ↗",
+  "TorrServer DSM Project ↗": "TorrServer DSM Project ↗",
   "♥ Support TorrServer project ↗": "♥ Support TorrServer project ↗",
+  "♥ Support TorrServer DSM project ↗": "♥ Support TorrServer DSM project ↗",
   "TorrServer Settings": "TorrServer Settings",
   "To apply changes, click <b>Save</b>, then <b>Restart</b>.": "To apply changes, click <b>Save</b>, then <b>Restart</b>.",
   "Save": "Save",
@@ -34,6 +35,10 @@
   "Enable HTTPS": "Enable HTTPS",
   "HTTPS port": "HTTPS port",
   "Force HTTPS (redirect HTTP to HTTPS)": "Force HTTPS (redirect HTTP to HTTPS)",
+  "Keep stream links on HTTP for players and TVs": "Keep stream links on HTTP for players and TVs",
+  "Players and TVs that cannot use HTTPS keep working: only the stream links (/stream, /play, playlists) stay on plain HTTP, everything else is redirected. The streams and the password of HTTP authentication are then sent unencrypted, so use this on a trusted home network only.": "Players and TVs that cannot use HTTPS keep working: only the stream links (/stream, /play, playlists) stay on plain HTTP, everything else is redirected. The streams and the password of HTTP authentication are then sent unencrypted, so use this on a trusted home network only.",
+  "HTTPS only (close the HTTP port)": "HTTPS only (close the HTTP port)",
+  "Nothing is served over plain HTTP any more, not even a redirect, so no request or password can leave the NAS unencrypted. Use it with a trusted certificate: with the self-signed one, players and TVs will not play.": "Nothing is served over plain HTTP any more, not even a redirect, so no request or password can leave the NAS unencrypted. Use it with a trusted certificate: with the self-signed one, players and TVs will not play.",
   "SSL Certificate": "SSL Certificate",
   "DSM certificate": "DSM certificate",
   "Enable authentication": "Enable authentication",
@@ -121,5 +126,7 @@
   ". Give the TorrServer user Read/Write permission on the shared folder ": ". Give the TorrServer user Read/Write permission on the shared folder ",
   "no write access": "no write access",
   " (in DSM: Control Panel → Shared Folder → Edit → Permissions → System internal user).": " (in DSM: Control Panel → Shared Folder → Edit → Permissions → System internal user).",
-  "Select TorrServer directory": "Select TorrServer directory"
+  "Select TorrServer directory": "Select TorrServer directory",
+  "redirects to HTTPS, streams stay on HTTP": "redirects to HTTPS, streams stay on HTTP",
+  "redirects to HTTPS": "redirects to HTTPS"
 }

@@ -8,7 +8,9 @@ TorrServer DSM provides a native DSM interface for managing TorrServer on Synolo
 
 - DSM application (the **Helper**) for managing the package, available in
   English, Russian, Ukrainian, Lithuanian and Polish
-- Port configuration for HTTP / HTTPS, Force HTTPS
+- Port configuration for HTTP / HTTPS, Force HTTPS, and an option to keep stream
+  links on plain HTTP for players and TVs that cannot use HTTPS, or HTTPS only
+  (the HTTP port is closed)
 - TorrServer cache folder and optional FUSE
 - HTTPS: TorrServer's own certificate, or one of your own uploaded on TorrServer's
   page, kept fresh by a DSM task or a reverse proxy (see [SSL certificates](#ssl-certificates))
@@ -294,11 +296,23 @@ No DSM is needed:
 
 CI runs all of them for every pull request and before every release.
 
+## Support
+
+TorrServer DSM is a free package that I maintain in my own time. I also pay for
+the domain and the hosting of the repository myself. If the package is useful to
+you and you would like to help with these costs, you can do it here:
+[paypal.me/VoxelFirmware](https://paypal.me/VoxelFirmware).
+
+This is entirely optional and does not affect support or features. TorrServer
+itself is a separate project by its author: if you like TorrServer, please
+support it too ([TorrServer donate](https://github.com/YouROK/TorrServer#donate)).
+
 ## Links
 
 - [TorrServer Project](https://github.com/YouROK/TorrServer)
 - [TorrServer DSM](https://github.com/vladlenas/TorrServer-DSM)
 - [Support TorrServer Project](https://github.com/YouROK/TorrServer#donate)
+- [Support TorrServer DSM project](https://paypal.me/VoxelFirmware)
 
 ## Credits
 
