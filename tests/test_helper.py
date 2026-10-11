@@ -244,12 +244,36 @@ class SaveSettingsTests(Base):
         self.assertEqual(h.read_file(h.FUSE_FILE), "1")
         self.assertEqual(json.load(open(h.ACCS_FILE)), {"alice": "pw"})
 
+    def test_http_media_is_saved_only_with_force_https(self):
+        for kwargs, expected in (
+            (dict(https="1", force_https="1", http_media="1"), "1"),
+            (dict(https="1", force_https="0", http_media="1"), "0"),
+            (dict(https="0", force_https="1", http_media="1"), "0"),
+            (dict(https="1", force_https="1"), "0"),
+        ):
+            ok, message = self.save(**kwargs)
+            self.assertTrue(ok, message)
+            self.assertEqual(h.read_file(h.HTTP_MEDIA_FILE), expected, kwargs)
+
+    def test_https_only_excludes_the_redirect_and_the_http_stream_links(self):
+        for kwargs, only, force, media in (
+            (dict(https="1", https_only="1"), "1", "0", "0"),
+            (dict(https="1", https_only="1", force_https="1", http_media="1"), "1", "0", "0"),
+            (dict(https="0", https_only="1"), "0", "0", "0"),
+            (dict(https="1", force_https="1", http_media="1"), "0", "1", "1"),
+        ):
+            ok, message = self.save(**kwargs)
+            self.assertTrue(ok, message)
+            self.assertEqual(
+                (h.read_file(h.HTTPS_ONLY_FILE), h.read_file(h.FORCE_HTTPS_FILE), h.read_file(h.HTTP_MEDIA_FILE)),
+                (only, force, media), kwargs)
+
     def test_certificate_fields_of_an_old_form_are_ignored(self):
         ok, message = self.save(ssl_mode="dsm", ssl_cert="/usr/syno/c.pem", ssl_key="/usr/syno/k.pem")
         self.assertTrue(ok, message)
         self.assertEqual(sorted(os.listdir(VAR)), sorted(os.path.basename(f) for f in (
             h.PORT_FILE, h.TORRSERVER_DIR_FILE, h.AUTH_FILE, h.FUSE_FILE, h.HTTPS_PORT_FILE,
-            h.HTTPS_FILE, h.FORCE_HTTPS_FILE)))
+            h.HTTPS_FILE, h.FORCE_HTTPS_FILE, h.HTTP_MEDIA_FILE, h.HTTPS_ONLY_FILE)))
 
     def test_saving_never_touches_a_certificate_pair(self):
         for name in ("server.pem", "server.key"):
@@ -1093,8 +1117,26 @@ class StatusPortRowsTests(Base):
     def test_http_and_https(self):
         self.assertEqual(self.rows(self.page(True, False)), {"HTTP": "8090", "HTTPS": "8091"})
 
+    def test_force_https_shows_that_http_only_redirects(self):
+        self.assertEqual(self.rows(self.page(True, True)),
+                         {"HTTP": "8090, redirects to HTTPS", "HTTPS": "8091"})
+
     def test_https_only_shows_http_as_disabled(self):
-        self.assertEqual(self.rows(self.page(True, True)), {"HTTP": "Disabled", "HTTPS": "8091"})
+        saved = h.get_https_only
+        h.get_https_only = lambda: True
+        try:
+            self.assertEqual(self.rows(self.page(True, False)), {"HTTP": "Disabled", "HTTPS": "8091"})
+        finally:
+            h.get_https_only = saved
+
+    def test_http_media_is_mentioned_in_the_status(self):
+        saved = h.get_http_media
+        h.get_http_media = lambda: True
+        try:
+            self.assertEqual(self.rows(self.page(True, True)),
+                             {"HTTP": "8090, redirects to HTTPS, streams stay on HTTP", "HTTPS": "8091"})
+        finally:
+            h.get_http_media = saved
 
     def test_force_flag_is_ignored_while_https_is_off(self):
         self.assertEqual(self.rows(self.page(False, True)), {"HTTP": "8090", "HTTPS": "Disabled"})

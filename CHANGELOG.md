@@ -3,6 +3,37 @@
 The top entry is used as the GitHub release notes; keep its version equal to
 `PKG_VERSION` in `Makefile`.
 
+## 2.11.146 (2026-10-10)
+
+TorrServer stays at `MatriX.146`.
+
+### Changed
+
+- **Information card:** the link buttons are now equal tiles (two columns, one
+  column on a narrow window), "SPK Project" is called "TorrServer DSM Project"
+  in all languages, and a new tile supports the TorrServer DSM project (domain and repository
+  hosting). A "Support" section is added to the README.
+- **Status page: with Force HTTPS the HTTP row no longer says "Disabled".** The
+  HTTP port still answers, but only with a redirect, so the row now reads for
+  example "8090, redirects to HTTPS".
+
+### Added
+
+- **HTTPS only.** A new option passes `--https-only` to TorrServer: the HTTP
+  port is not opened at all, so not even a redirect is served and no request or
+  password can reach TorrServer over plain HTTP (with Force HTTPS a client
+  first talks to the HTTP port and is only then redirected). Use it with a
+  trusted certificate; with the self-signed one players and TVs will not play.
+  It excludes Force HTTPS and the HTTP stream links, and the HTTP port is left
+  out of the DSM firewall rule.
+- **Keep stream links on HTTP for players and TVs.** A new option next to
+  "Force HTTPS" passes `--http-media` to TorrServer: everything is still
+  redirected to HTTPS, but stream links (`/stream`, `/play`, playlists) stay on
+  plain HTTP, so players and TVs that cannot use HTTPS keep working. Streams
+  and the password of HTTP authentication are then not encrypted, so use it on a
+  trusted home network only. The option is available only together with
+  Force HTTPS.
+
 ## 2.10.146 (2026-10-10)
 
 TorrServer stays at `MatriX.146`.

@@ -21,10 +21,11 @@
   "Not set": "Nenurodytas",
   "Architecture": "Architektūra",
   "Information": "Informacija",
-  "TorrServer project, Synology SPK package and support": "TorrServer projektas, Synology SPK paketas ir palaikymas",
+  "TorrServer project, TorrServer DSM package and support": "TorrServer projektas, TorrServer DSM paketas ir palaikymas",
   "TorrServer Project ↗": "TorrServer projektas ↗",
-  "SPK Project ↗": "SPK projektas ↗",
+  "TorrServer DSM Project ↗": "TorrServer DSM projektas ↗",
   "♥ Support TorrServer project ↗": "♥ Paremti TorrServer projektą ↗",
+  "♥ Support TorrServer DSM project ↗": "♥ Paremti TorrServer DSM projektą ↗",
   "TorrServer Settings": "TorrServer nustatymai",
   "To apply changes, click <b>Save</b>, then <b>Restart</b>.": "Norėdami pritaikyti pakeitimus, spustelėkite <b>Išsaugoti</b>, tada <b>Paleisti iš naujo</b>.",
   "Save": "Išsaugoti",
@@ -34,6 +35,10 @@
   "Enable HTTPS": "Įjungti HTTPS",
   "HTTPS port": "HTTPS prievadas",
   "Force HTTPS (redirect HTTP to HTTPS)": "Priverstinis HTTPS (peradresuoti HTTP į HTTPS)",
+  "Keep stream links on HTTP for players and TVs": "Palikti srautų nuorodas per HTTP grotuvams ir televizoriams",
+  "Players and TVs that cannot use HTTPS keep working: only the stream links (/stream, /play, playlists) stay on plain HTTP, everything else is redirected. The streams and the password of HTTP authentication are then sent unencrypted, so use this on a trusted home network only.": "Grotuvai ir televizoriai be HTTPS palaikymo toliau veiks: per paprastą HTTP lieka tik srautų nuorodos (/stream, /play, grojaraščiai), visa kita nukreipiama. Srautai ir HTTP autentifikavimo slaptažodis tada siunčiami nešifruoti, todėl įjunkite tik patikimame namų tinkle.",
+  "HTTPS only (close the HTTP port)": "Tik HTTPS (uždaryti HTTP prievadą)",
+  "Nothing is served over plain HTTP any more, not even a redirect, so no request or password can leave the NAS unencrypted. Use it with a trusted certificate: with the self-signed one, players and TVs will not play.": "Per paprastą HTTP nebeteikiama nieko, net nukreipimo, todėl nei užklausa, nei slaptažodis neišeis iš NAS nešifruoti. Naudokite su patikimu sertifikatu: su pačių pasirašytu grotuvai ir televizoriai negros.",
   "SSL Certificate": "SSL sertifikatas",
   "DSM certificate": "DSM sertifikatas",
   "Enable authentication": "Įjungti autentifikavimą",
@@ -121,5 +126,7 @@
   ". Give the TorrServer user Read/Write permission on the shared folder ": ". Suteikite naudotojui TorrServer teisę Read/Write bendrinamam aplankui ",
   "no write access": "nėra rašymo teisių",
   " (in DSM: Control Panel → Shared Folder → Edit → Permissions → System internal user).": " (DSM: Control Panel → Shared Folder → Edit → Permissions → System internal user).",
-  "Select TorrServer directory": "Pasirinkti TorrServer katalogą"
+  "Select TorrServer directory": "Pasirinkti TorrServer katalogą",
+  "redirects to HTTPS, streams stay on HTTP": "nukreipia į HTTPS, srautai lieka per HTTP",
+  "redirects to HTTPS": "nukreipia į HTTPS"
 }

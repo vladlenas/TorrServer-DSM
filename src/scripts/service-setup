@@ -61,13 +61,23 @@ if [ "$(cat "${CONFIG_DIR}/torrserver.auth" 2>/dev/null)" = "1" ] &&
 fi
 
 HTTPS_ENABLED="0"
+HTTP_CLOSED="0"
 SSL_ARGS=""
 if [ "$(cat "${CONFIG_DIR}/torrserver.https" 2>/dev/null)" = "1" ]; then
     HTTPS_ENABLED="1"
     SSL_ARGS="--ssl --sslport ${HTTPS_PORT}"
 
-    if [ "$(cat "${CONFIG_DIR}/torrserver.force.https" 2>/dev/null)" = "1" ]; then
+    if [ "$(cat "${CONFIG_DIR}/torrserver.https.only" 2>/dev/null)" = "1" ]; then
+        # The plain HTTP port is not opened at all (no redirect, no stream links).
+        SSL_ARGS="${SSL_ARGS} --https-only"
+        HTTP_CLOSED="1"
+    elif [ "$(cat "${CONFIG_DIR}/torrserver.force.https" 2>/dev/null)" = "1" ]; then
         SSL_ARGS="${SSL_ARGS} --force-https"
+
+        # Stream links stay on plain HTTP for players and TVs without HTTPS.
+        if [ "$(cat "${CONFIG_DIR}/torrserver.http.media" 2>/dev/null)" = "1" ]; then
+            SSL_ARGS="${SSL_ARGS} --http-media"
+        fi
     fi
 fi
 
@@ -121,6 +131,11 @@ update_firewall_port()
 
     if [ "${HTTPS_ENABLED}" = "1" ]; then
         firewall_ports="${firewall_ports},${HTTPS_PORT}"
+    fi
+
+    # With "HTTPS only" the HTTP port is closed, so it is not listed either.
+    if [ "${HTTP_CLOSED}" = "1" ]; then
+        firewall_ports="${HTTPS_PORT}"
     fi
 
     # The helper listens on 127.0.0.1 only (reached through DSM nginx), so its
@@ -215,7 +230,7 @@ OBSOLETE_VAR_FILES="torrserver.fuse.path cache.path"
 
 # Files holding package settings (not TorrServer's own database/torrents).
 SETTINGS_VAR_FILES="torrserver.port torrserver.auth accs.db torrserver.dir torrserver.fuse
-torrserver.https torrserver.https.port torrserver.force.https cache.pending
+torrserver.https torrserver.https.port torrserver.force.https torrserver.http.media torrserver.https.only cache.pending
 helper.language"
 
 remove_var_file()

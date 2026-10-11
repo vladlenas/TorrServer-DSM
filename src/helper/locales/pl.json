@@ -21,10 +21,11 @@
   "Not set": "Nie ustawiono",
   "Architecture": "Architektura",
   "Information": "Informacje",
-  "TorrServer project, Synology SPK package and support": "Projekt TorrServer, pakiet SPK dla Synology i wsparcie",
+  "TorrServer project, TorrServer DSM package and support": "Projekt TorrServer, pakiet TorrServer DSM i wsparcie",
   "TorrServer Project ↗": "Projekt TorrServer ↗",
-  "SPK Project ↗": "Projekt SPK ↗",
+  "TorrServer DSM Project ↗": "Projekt TorrServer DSM ↗",
   "♥ Support TorrServer project ↗": "♥ Wesprzyj projekt TorrServer ↗",
+  "♥ Support TorrServer DSM project ↗": "♥ Wesprzyj projekt TorrServer DSM ↗",
   "TorrServer Settings": "Ustawienia TorrServer",
   "To apply changes, click <b>Save</b>, then <b>Restart</b>.": "Aby zastosować zmiany, kliknij <b>Zapisz</b>, a następnie <b>Uruchom ponownie</b>.",
   "Save": "Zapisz",
@@ -34,6 +35,10 @@
   "Enable HTTPS": "Włącz HTTPS",
   "HTTPS port": "Port HTTPS",
   "Force HTTPS (redirect HTTP to HTTPS)": "Wymuś HTTPS (przekieruj HTTP do HTTPS)",
+  "Keep stream links on HTTP for players and TVs": "Zostaw linki do strumieni na HTTP dla odtwarzaczy i telewizorów",
+  "Players and TVs that cannot use HTTPS keep working: only the stream links (/stream, /play, playlists) stay on plain HTTP, everything else is redirected. The streams and the password of HTTP authentication are then sent unencrypted, so use this on a trusted home network only.": "Odtwarzacze i telewizory bez obsługi HTTPS nadal będą działać: przez zwykły HTTP zostają tylko linki do strumieni (/stream, /play, playlisty), a cała reszta jest przekierowywana. Strumienie i hasło uwierzytelniania HTTP są wtedy wysyłane bez szyfrowania, więc włączaj tylko w zaufanej sieci domowej.",
+  "HTTPS only (close the HTTP port)": "Tylko HTTPS (zamknij port HTTP)",
+  "Nothing is served over plain HTTP any more, not even a redirect, so no request or password can leave the NAS unencrypted. Use it with a trusted certificate: with the self-signed one, players and TVs will not play.": "Przez zwykły HTTP nie jest już serwowane nic, nawet przekierowanie, więc żadne żądanie ani hasło nie opuści NAS bez szyfrowania. Używaj z zaufanym certyfikatem: z certyfikatem własnym odtwarzacze i telewizory nie zagrają.",
   "SSL Certificate": "Certyfikat SSL",
   "DSM certificate": "Certyfikat DSM",
   "Enable authentication": "Włącz uwierzytelnianie",
@@ -121,5 +126,7 @@
   ". Give the TorrServer user Read/Write permission on the shared folder ": ". Nadaj użytkownikowi TorrServer uprawnienie „Odczyt/Zapis” do folderu współdzielonego ",
   "no write access": "brak uprawnień do zapisu",
   " (in DSM: Control Panel → Shared Folder → Edit → Permissions → System internal user).": " (w DSM: Panel sterowania → Folder współdzielony → Edytuj → Uprawnienia → Wewnętrzny użytkownik systemu).",
-  "Select TorrServer directory": "Wybierz katalog TorrServer"
+  "Select TorrServer directory": "Wybierz katalog TorrServer",
+  "redirects to HTTPS, streams stay on HTTP": "przekierowuje na HTTPS, strumienie zostają na HTTP",
+  "redirects to HTTPS": "przekierowuje na HTTPS"
 }
