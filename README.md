@@ -12,7 +12,7 @@ TorrServer DSM provides a native DSM interface for managing TorrServer on Synolo
   links on plain HTTP for players and TVs that cannot use HTTPS, or HTTPS only
   (the HTTP port is closed)
 - TorrServer cache folder and optional FUSE, with an optional Plex library scan
-  when a torrent is added (see [Plex and FUSE](#plex-and-fuse))
+  when a torrent is added (see [Media servers: Plex and FUSE](#media-servers-plex-and-fuse))
 - HTTPS: TorrServer's own certificate, or one of your own uploaded on TorrServer's
   page, kept fresh by a DSM task or a reverse proxy (see [SSL certificates](#ssl-certificates))
 - HTTP authentication
@@ -62,34 +62,38 @@ intends for packages. Nothing in it runs as root.
 The TorrServer folder is optional. Leave it empty and TorrServer keeps its
 data where it already is; the disk cache is then switched on in the TorrServer
 web interface. Choose a folder only if you want the Helper to prepare `Cache`
-(and `FUSE`) for you. Ticking **FUSE** shows a short inline hint on using it
-with Plex or Emby; there is no separate recommendations window.
+(and `FUSE`) for you. Notes on Plex and FUSE are in
+the **Using FUSE with Plex** menu under the FUSE checkbox.
 
-### Plex and FUSE
+### Media servers: Plex and FUSE
 
 Plex does not notice new files on a FUSE folder by itself, because a FUSE
-folder sends no change notifications. Under the **FUSE** checkbox the Helper can
-ask Plex to scan a library whenever a torrent is added to TorrServer:
+folder sends no change notifications. The **Using FUSE with Plex** menu in the
+Settings (collapsed, under the FUSE checkbox) lets the Helper ask Plex to scan whenever a
+torrent is added to TorrServer. It needs FUSE to be enabled.
 
 1. Tick **Scan the Plex library when a torrent is added**.
 2. **Plex address** is where the Helper reaches Plex (the default
    `http://127.0.0.1:32400` fits Plex on the same NAS).
-3. **Plex token** is the token of your Plex account (it stays on the NAS in a
-   file only the package user can read, and is never shown again).
-4. **Library ID** is the number after `sections/` in the library address in
-   Plex Web.
+3. **Plex token** is the token of your Plex account. It stays on the NAS in a
+   file only the package user can read and is never shown again.
+4. **Library IDs** are the numbers of the libraries to scan, for example `6,7`
+   for movies and series. Empty means every library.
 
-Saving checks the token and the library with Plex. A scan only lists folder
+Saving checks the token and the libraries with Plex. A scan only lists folder
 names; it does not download any torrent data. The scan runs a few seconds after
 a torrent is added and once more about 45 seconds later, because a magnet link
 shows its files in the folder only when its metadata has arrived. The result is
-written to the TorrServer log.
+written to the TorrServer log as `plex: ...`.
 
-For Plex libraries on FUSE the hint lists the Plex settings that would read the
-virtual files in full (video preview and chapter thumbnails, intro and credits
-markers, loudness analysis, extensive media analysis) and one more that can
-delete items after a scan of an empty folder (**Empty trash automatically after
-every scan**).
+In the same menu two more collapsed sections explain where to find the token and
+the library IDs, and list the Plex settings that would make Plex read the
+virtual files in full and so download your torrents (video preview and chapter
+thumbnails, intro and credits markers, loudness analysis, extensive media
+analysis) plus the one that can delete items after a scan of an empty folder
+(**Empty trash automatically after every scan**). **Show only active torrents**
+in TorrServer's TorrFS settings has to stay off, otherwise torrents that are not
+active disappear from the folder.
 
 If the **TorrServer** user may write there, the Helper creates `Cache` and
 `FUSE` itself. The folder chooser marks folders it cannot write to with
@@ -109,7 +113,7 @@ example a port that is already in use) and a **Start** button.
 HTTPS is switched on in the Helper (**Settings → HTTPS**). The certificate
 itself is set on TorrServer's own web page. The package runs without root, so
 it cannot read DSM's certificate store and does not copy certificates for you.
-The **SSL Certificate** card in the Helper's Settings page is a short manual for
+The **SSL certificate instructions** menu in the HTTPS card of the Helper's Settings page is a short manual for
 what follows.
 
 **Default.** Nothing to do. TorrServer makes a self-signed pair

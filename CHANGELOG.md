@@ -3,6 +3,22 @@
 The top entry is used as the GitHub release notes; keep its version equal to
 `PKG_VERSION` in `Makefile`.
 
+## 2.13.146 (2026-10-11)
+
+TorrServer stays at `MatriX.146`.
+
+### Changed
+
+- **Plex menu under the FUSE checkbox.** Everything about Plex now sits in one
+  collapsed menu, **Using FUSE with Plex**: the scan option, address, token,
+  library IDs and the instructions. A menu for another media server can be added
+  below it in the same way.
+- **Several Plex libraries.** Library IDs take a comma-separated list, for
+  example `4,6` for series and movies. Empty means every library. The hint now
+  says the ID is the number after `source=` in the Plex Web address.
+- **SSL certificate instructions** moved from a separate block under the buttons
+  into a collapsed menu inside the HTTPS block.
+
 ## 2.12.146 (2026-10-11)
 
 TorrServer stays at `MatriX.146`.
