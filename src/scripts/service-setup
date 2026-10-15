@@ -231,7 +231,7 @@ OBSOLETE_VAR_FILES="torrserver.fuse.path cache.path"
 # Files holding package settings (not TorrServer's own database/torrents).
 SETTINGS_VAR_FILES="torrserver.port torrserver.auth accs.db torrserver.dir torrserver.fuse
 torrserver.https torrserver.https.port torrserver.force.https torrserver.http.media torrserver.https.only cache.pending
-torrserver.plex.scan torrserver.plex.url torrserver.plex.token torrserver.plex.section
+torrserver.proxy.url torrserver.plex.scan torrserver.plex.url torrserver.plex.token torrserver.plex.section
 helper.language"
 
 remove_var_file()
