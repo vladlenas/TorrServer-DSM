@@ -1615,13 +1615,14 @@ class PlexWatcherTests(Base):
         watcher.step(500)
         self.assertEqual(self.refreshes, ["3", "3"])
 
-    def test_removing_a_torrent_does_not_scan(self):
+    def test_removing_a_torrent_scans_too(self):
         watcher = h.PlexWatcher()
         watcher.step(0)
         self.torrents.discard("a")
         watcher.step(10)
-        watcher.step(200)
         self.assertEqual(self.refreshes, [])
+        watcher.step(10 + h.PLEX_SCAN_DELAYS[0])
+        self.assertEqual(self.refreshes, ["3"])
 
     def test_a_torrserver_that_is_down_changes_nothing(self):
         watcher = h.PlexWatcher()
@@ -1671,7 +1672,7 @@ class PlexBlockTests(Base):
         card = card[:card.index("Authentication</span>")]
         self.assertIn("<summary>Using FUSE with Plex</summary>", card)
         self.assertNotIn("<details class=\"media-hint\" open", card)
-        for text in ("Scan the Plex library when a torrent is added", 'name="plex_url"', 'name="plex_token"',
+        for text in ("Scan the Plex library when a torrent is added or removed", 'name="plex_url"', 'name="plex_token"',
                      'name="plex_section"', "togglePlex()"):
             self.assertIn(text, card)
         self.assertEqual(page.count('type="password" name="plex_token"'), 1)

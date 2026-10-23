@@ -2902,7 +2902,7 @@ PLEX_BLOCK = """
     <div class="checkbox-row">
         <label>
             <input type="checkbox" name="plex_scan" value="1" __CHECKED__ onchange="togglePlex()">
-            Scan the Plex library when a torrent is added
+            Scan the Plex library when a torrent is added or removed
         </label>
     </div>
 
@@ -3872,7 +3872,7 @@ PLEX_SCAN_DELAYS = (3, 45)
 
 
 class PlexWatcher:
-    """Scans the Plex library when a torrent is added to TorrServer."""
+    """Scans the Plex library when a torrent is added to or removed from TorrServer."""
 
     def __init__(self):
         self.known = None
@@ -3900,8 +3900,9 @@ class PlexWatcher:
         hashes = self.torrent_hashes()
         if hashes is not None:
             # The first answer is only the starting point: torrents that were
-            # already there are not "added".
-            if self.known is not None and hashes - self.known:
+            # already there are not "added". A removed torrent leaves the FUSE
+            # folder, so Plex needs a scan for that too.
+            if self.known is not None and (hashes - self.known or self.known - hashes):
                 self.due.extend(now + delay for delay in PLEX_SCAN_DELAYS)
             self.known = hashes
 

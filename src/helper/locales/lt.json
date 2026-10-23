@@ -122,7 +122,7 @@
   "Select TorrServer directory": "Pasirinkti TorrServer katalogą",
   "redirects to HTTPS, streams stay on HTTP": "nukreipia į HTTPS, srautai lieka per HTTP",
   "redirects to HTTPS": "nukreipia į HTTPS",
-  "Scan the Plex library when a torrent is added": "Skenuoti „Plex“ mediatekę pridėjus torentą",
+  "Scan the Plex library when a torrent is added or removed": "Skenuoti „Plex“ mediatekę pridėjus ar pašalinus torentą",
   "Plex address": "„Plex“ adresas",
   "Plex token": "„Plex“ prieigos raktas",
   "Library IDs": "Bibliotekų ID",

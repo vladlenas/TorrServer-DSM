@@ -122,7 +122,7 @@
   "Select TorrServer directory": "Выбор каталога TorrServer",
   "redirects to HTTPS, streams stay on HTTP": "перенаправляет на HTTPS, потоки остаются на HTTP",
   "redirects to HTTPS": "перенаправляет на HTTPS",
-  "Scan the Plex library when a torrent is added": "Сканировать медиатеку Plex при добавлении торрента",
+  "Scan the Plex library when a torrent is added or removed": "Сканировать медиатеку Plex при добавлении или удалении торрента",
   "Plex address": "Адрес Plex",
   "Plex token": "Токен Plex",
   "Library IDs": "ID библиотек",
