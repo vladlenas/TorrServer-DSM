@@ -3,6 +3,11 @@
 The top entry is used as the GitHub release notes; keep its version equal to
 `PKG_VERSION` in `Makefile`.
 
+Under each heading write one line `<!-- package-center: 1. ... 2. ... -->`: a
+short numbered list in English that DSM Package Center shows next to the update
+button (it goes into the `changelog` field of the package `INFO`; up to 600
+characters, no quotes). GitHub does not show it in the release notes.
+
 ## 2.16.147.1 (2026-10-23)
 
 TorrServer updated from `MatriX.147` to `MatriX.147.1`.
