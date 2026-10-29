@@ -78,6 +78,11 @@ if [ "$top" = "$PKG_VERSION" ]; then
 else
     fail "the top CHANGELOG.md entry is '${top}', expected '${PKG_VERSION}'"
 fi
+if awk -v v="$PKG_VERSION" '/^## /{if(f)exit; if($2==v)f=1; next} f&&/^<!-- package-center: *[^ ]/{ok=1} END{exit !ok}' CHANGELOG.md; then
+    ok "the entry has a package-center line for Package Center"
+else
+    fail "add a '<!-- package-center: 1. ... -->' line under the ${PKG_VERSION} heading in CHANGELOG.md"
+fi
 if sh .github/scripts/release-notes.sh "$PKG_VERSION" CHANGELOG.md >/dev/null 2>&1; then
     ok "the entry has text for the release notes"
 else

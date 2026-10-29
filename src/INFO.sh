@@ -5,6 +5,7 @@ set -e
 PKG_VERSION="${1:?Package version is required}"
 ARCH="${2:?Architecture is required}"
 PKG_SIZE="${3:?Package size is required}"
+CHANGELOG="${4:-}"
 
 TIMESTAMP="$(date -u +%Y%m%d-%H:%M:%S)"
 
@@ -55,3 +56,8 @@ package_icon_256="PACKAGE_ICON_256.PNG"
 create_time="${TIMESTAMP}"
 extractsize=${PKG_SIZE}
 EOF
+
+# Shown by Package Center next to the update button.
+if [ -n "${CHANGELOG}" ]; then
+    echo "changelog=\"${CHANGELOG}\""
+fi

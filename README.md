@@ -12,7 +12,7 @@ TorrServer DSM provides a native DSM interface for managing TorrServer on Synolo
   links on plain HTTP for players and TVs that cannot use HTTPS, or HTTPS only
   (the HTTP port is closed)
 - TorrServer cache folder and optional FUSE, with an optional Plex library scan
-  when a torrent is added (see [Media servers: Plex and FUSE](#media-servers-plex-and-fuse))
+  when a torrent is added or removed (see [Media servers: Plex and FUSE](#media-servers-plex-and-fuse))
 - HTTPS: TorrServer's own certificate, or one of your own uploaded on TorrServer's
   page, kept fresh by a DSM task or a reverse proxy (see [SSL certificates](#ssl-certificates))
 - HTTP authentication
@@ -70,9 +70,9 @@ the **Using FUSE with Plex** menu under the FUSE checkbox.
 Plex does not notice new files on a FUSE folder by itself, because a FUSE
 folder sends no change notifications. The **Using FUSE with Plex** menu in the
 Settings (collapsed, under the FUSE checkbox) lets the Helper ask Plex to scan whenever a
-torrent is added to TorrServer. It needs FUSE to be enabled.
+torrent is added to or removed from TorrServer. It needs FUSE to be enabled.
 
-1. Tick **Scan the Plex library when a torrent is added**.
+1. Tick **Scan the Plex library when a torrent is added or removed**.
 2. **Plex address** is where the Helper reaches Plex (the default
    `http://127.0.0.1:32400` fits Plex on the same NAS).
 3. **Plex token** is the token of your Plex account. It stays on the NAS in a

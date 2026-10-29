@@ -13,7 +13,7 @@ awk -v v="$VERSION" '
         if ($2 == v) { found = 1 }
         next
     }
-    found { print }
+    found && !/^<!-- package-center:/ { print }
 ' "$FILE" | sed -e '/./,$!d' | sed -e ':a' -e '/^[[:space:]]*$/{$d;N;ba' -e '}' > /tmp/release-notes.$$
 
 if [ -s /tmp/release-notes.$$ ]; then
