@@ -8,6 +8,16 @@ short numbered list in English that DSM Package Center shows next to the update
 button (it goes into the `changelog` field of the package `INFO`; up to 600
 characters, no quotes). GitHub does not show it in the release notes.
 
+## 2.17.152 (2026-11-28)
+
+<!-- package-center: 1. Update to TorrServer MatriX.152. The package itself is unchanged. -->
+
+TorrServer updated from `MatriX.151` to `MatriX.152`.
+
+### Changed
+
+- **TorrServer:** updated to `MatriX.152`. The package itself is unchanged.
+
 ## 2.17.151 (2026-11-22)
 
 <!-- package-center: 1. Update to TorrServer MatriX.151. The package itself is unchanged. -->
